@@ -5,11 +5,11 @@ package buildinfo
 // Defaults cover local development builds.
 var (
 	// Version is the semantic version or git describe output of the binary.
-	Version = "dev"
+	Version = "1.0.0"
 
 	// Commit is the git commit SHA baked into the binary.
 	Commit = "none"
 
 	// BuildDate records when the binary was built in UTC.
-	BuildDate = "unknown"
+	BuildDate = "2026-04-16T11:16:11Z"
 )

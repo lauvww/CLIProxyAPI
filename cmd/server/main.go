@@ -36,9 +36,9 @@ import (
 )
 
 var (
-	Version           = "dev"
+	Version           = "1.0.0"
 	Commit            = "none"
-	BuildDate         = "unknown"
+	BuildDate         = "2026-04-16T11:16:11Z"
 	DefaultConfigPath = ""
 )
 
