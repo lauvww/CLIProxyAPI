@@ -66,6 +66,14 @@ Get 10% OFF GLM CODING PLAN：https://z.ai/subscribe?ic=8JVLJQFSKB
 - OpenAI-compatible upstream providers via config (e.g., OpenRouter)
 - Reusable Go SDK for embedding the proxy (see `docs/sdk-usage.md`)
 
+## Recent Management Updates
+
+- **Auth pool mode** now supports managing multiple credential directories while keeping runtime behavior stable: only one `active-path` participates in live routing at a time.
+- Switching the current auth pool hot-applies the new `auth-dir`, restores that pool's own routing strategy, and moves the file watcher to the new directory without restarting the service.
+- Management usage statistics and auth-file operations now scope to the current auth pool by default when auth-pool mode is enabled. You can still explicitly view all pools in the management UI.
+- Recent usage persistence is stored per auth pool. On Windows desktop deployments the packaged build writes pool snapshots under `D:\CLIProxyAPI\use` and restores the most recent 7 days for the current pool on startup.
+- Windows tray mode keeps the service in the notification area, persists usage before restart/exit, opens the management panel from the tray, and detaches the console during tray launch so the packaged desktop startup path no longer relies on a visible taskbar console window.
+
 ## Getting Started
 
 CLIProxyAPI Guides: [https://help.router-for.me/](https://help.router-for.me/)
