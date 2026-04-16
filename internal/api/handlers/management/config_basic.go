@@ -1,10 +1,12 @@
 package management
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -21,6 +23,7 @@ import (
 const (
 	latestReleaseURL       = "https://api.github.com/repos/lauvww/CLIProxyAPI/releases/latest"
 	latestReleaseUserAgent = "CLIProxyAPI"
+	latestVersionFileName  = "VERSION"
 )
 
 func (h *Handler) GetConfig(c *gin.Context) {
@@ -48,18 +51,47 @@ func (h *Handler) GetLatestVersion(c *gin.Context) {
 		util.SetProxy(sdkCfg, client)
 	}
 
-	req, err := http.NewRequestWithContext(c.Request.Context(), http.MethodGet, latestReleaseURL, nil)
+	version, source, err := fetchLatestVersion(c.Request.Context(), client)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "request_create_failed", "message": err.Error()})
+		c.JSON(http.StatusBadGateway, gin.H{"error": "latest_version_unavailable", "message": err.Error()})
 		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"latest-version": version, "source": source})
+}
+
+func fetchLatestVersion(ctx context.Context, client *http.Client) (string, string, error) {
+	version, err := fetchLatestVersionFromRelease(ctx, client, latestReleaseURL)
+	if err == nil && version != "" {
+		return version, "release", nil
+	}
+
+	versionFileURL := resolveVersionFileURL(latestReleaseURL)
+	if versionFileURL != "" {
+		if fileVersion, fileErr := fetchLatestVersionFromFile(ctx, client, versionFileURL); fileErr == nil && fileVersion != "" {
+			return fileVersion, "version_file", nil
+		} else if err == nil {
+			err = fileErr
+		}
+	}
+
+	if err == nil {
+		err = fmt.Errorf("no release or version file could be resolved")
+	}
+	return "", "", err
+}
+
+func fetchLatestVersionFromRelease(ctx context.Context, client *http.Client, releaseURL string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, releaseURL, nil)
+	if err != nil {
+		return "", fmt.Errorf("create release request: %w", err)
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("User-Agent", latestReleaseUserAgent)
 
 	resp, err := client.Do(req)
 	if err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": "request_failed", "message": err.Error()})
-		return
+		return "", fmt.Errorf("request latest release: %w", err)
 	}
 	defer func() {
 		if errClose := resp.Body.Close(); errClose != nil {
@@ -69,14 +101,12 @@ func (h *Handler) GetLatestVersion(c *gin.Context) {
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		c.JSON(http.StatusBadGateway, gin.H{"error": "unexpected_status", "message": fmt.Sprintf("status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))})
-		return
+		return "", fmt.Errorf("latest release request returned status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 
 	var info releaseInfo
 	if errDecode := json.NewDecoder(resp.Body).Decode(&info); errDecode != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": "decode_failed", "message": errDecode.Error()})
-		return
+		return "", fmt.Errorf("decode latest release response: %w", errDecode)
 	}
 
 	version := strings.TrimSpace(info.TagName)
@@ -84,11 +114,74 @@ func (h *Handler) GetLatestVersion(c *gin.Context) {
 		version = strings.TrimSpace(info.Name)
 	}
 	if version == "" {
-		c.JSON(http.StatusBadGateway, gin.H{"error": "invalid_response", "message": "missing release version"})
-		return
+		return "", fmt.Errorf("latest release response did not include a version")
+	}
+	return version, nil
+}
+
+func fetchLatestVersionFromFile(ctx context.Context, client *http.Client, versionFileURL string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, versionFileURL, nil)
+	if err != nil {
+		return "", fmt.Errorf("create version file request: %w", err)
+	}
+	req.Header.Set("User-Agent", latestReleaseUserAgent)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("request version file: %w", err)
+	}
+	defer func() {
+		if errClose := resp.Body.Close(); errClose != nil {
+			log.WithError(errClose).Debug("failed to close version file response body")
+		}
+	}()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return "", fmt.Errorf("version file request returned status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 
-	c.JSON(http.StatusOK, gin.H{"latest-version": version})
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1024))
+	if err != nil {
+		return "", fmt.Errorf("read version file: %w", err)
+	}
+
+	version := strings.TrimSpace(string(body))
+	if version == "" {
+		return "", fmt.Errorf("version file is empty")
+	}
+	return version, nil
+}
+
+func resolveVersionFileURL(releaseURL string) string {
+	parsed, err := url.Parse(strings.TrimSpace(releaseURL))
+	if err != nil || parsed == nil {
+		return ""
+	}
+
+	host := strings.ToLower(parsed.Host)
+	switch host {
+	case "api.github.com":
+		parts := strings.Split(strings.Trim(parsed.Path, "/"), "/")
+		if len(parts) >= 4 && strings.EqualFold(parts[0], "repos") {
+			owner := strings.TrimSpace(parts[1])
+			repo := strings.TrimSpace(parts[2])
+			if owner != "" && repo != "" {
+				return fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/main/%s", owner, repo, latestVersionFileName)
+			}
+		}
+	case "github.com":
+		parts := strings.Split(strings.Trim(parsed.Path, "/"), "/")
+		if len(parts) >= 2 {
+			owner := strings.TrimSpace(parts[0])
+			repo := strings.TrimSuffix(strings.TrimSpace(parts[1]), ".git")
+			if owner != "" && repo != "" {
+				return fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/main/%s", owner, repo, latestVersionFileName)
+			}
+		}
+	}
+
+	return ""
 }
 
 func WriteConfig(path string, data []byte) error {
