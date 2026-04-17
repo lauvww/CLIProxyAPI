@@ -78,6 +78,10 @@ Get 10% OFF GLM CODING PLAN：https://z.ai/subscribe?ic=8JVLJQFSKB
 
 CLIProxyAPI Guides: [https://help.router-for.me/](https://help.router-for.me/)
 
+## Versioning
+
+See [VERSIONING.md](VERSIONING.md) for the fork's version source of truth, update-check behavior, and local build workflow.
+
 ## Management API
 
 see [MANAGEMENT_API.md](https://help.router-for.me/management/api)

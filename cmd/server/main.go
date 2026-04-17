@@ -38,7 +38,7 @@ import (
 var (
 	Version           = "1.0.0"
 	Commit            = "none"
-	BuildDate         = "2026-04-16T11:16:11Z"
+	BuildDate         = "local-build"
 	DefaultConfigPath = ""
 )
 

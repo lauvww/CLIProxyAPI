@@ -11,5 +11,5 @@ var (
 	Commit = "none"
 
 	// BuildDate records when the binary was built in UTC.
-	BuildDate = "2026-04-16T11:16:11Z"
+	BuildDate = "local-build"
 )
