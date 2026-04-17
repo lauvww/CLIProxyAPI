@@ -50,6 +50,12 @@ api-keys:
   - "your-api-key-2"
   - "your-api-key-3"
 
+# Optional display aliases for configured client API keys.
+# These aliases are used by the management UI usage statistics.
+# api-key-aliases:
+#   "your-api-key-1": "Desktop Script"
+#   "your-api-key-2": "VS Code"
+
 # Enable debug logging
 debug: false
 

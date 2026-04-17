@@ -170,6 +170,9 @@ func (s *RequestStatistics) Record(ctx context.Context, record coreusage.Record)
 	detail := normaliseDetail(record.Detail)
 	totalTokens := detail.TotalTokens
 	statsKey := record.APIKey
+	if alias := lookupAPIKeyAlias(statsKey); alias != "" {
+		statsKey = alias
+	}
 	if statsKey == "" {
 		statsKey = resolveAPIIdentifier(ctx, record)
 	}

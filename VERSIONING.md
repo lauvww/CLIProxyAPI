@@ -25,9 +25,10 @@ This fork uses a simple repository-driven version policy.
 2. Commit the version bump
 3. Build locally with `scripts/build-local.ps1`
 4. Publish the resulting `cli-proxy-api.exe`
-5. When ready for a public release, create a Git tag such as `v1.0.0` and publish a GitHub Release
+5. When ready for a public release, create a Git tag such as `v1.1.0` and publish a GitHub Release
 
 ## Notes
 
 - Do not use `BuildDate` in source code as a manual timestamp. Treat it as build output only.
 - Local ad-hoc `go build` commands may show `BuildDate=local-build`. Use the build script when you need a stamped binary.
+- `scripts/build-local.ps1` can target a custom output path via `-OutputPath` and prefers the workspace-local Go toolchain when `..\.tools\go1.26.2\go\bin\go.exe` is available.

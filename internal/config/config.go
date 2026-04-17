@@ -617,6 +617,7 @@ func LoadConfigOptional(configFile string, optional bool) (*Config, error) {
 		return nil, fmt.Errorf("failed to parse config file: %w", err)
 	}
 	cfg.NormalizeAuthPool()
+	cfg.NormalizeAPIKeyAliases()
 
 	// NOTE: Startup legacy key migration is intentionally disabled.
 	// Reason: avoid mutating config.yaml during server startup.
@@ -788,12 +789,12 @@ func (cfg *Config) NormalizeAuthPool() {
 		}
 		normalizedStrategies[normalizedPath] = normalizedStrategy
 	}
-	if active != "" {
-		if normalizedStrategy, ok := normalizeAuthPoolRoutingStrategy(cfg.Routing.Strategy); ok {
-			if _, exists := normalizedStrategies[active]; !exists {
-				normalizedStrategies[active] = normalizedStrategy
-			}
+	defaultStrategy := defaultAuthPoolRoutingStrategy(cfg.Routing.Strategy)
+	for _, poolPath := range paths {
+		if _, exists := normalizedStrategies[poolPath]; exists {
+			continue
 		}
+		normalizedStrategies[poolPath] = defaultStrategy
 	}
 
 	cfg.AuthPool.Paths = paths
@@ -961,6 +962,61 @@ func normalizeAuthPoolRoutingStrategy(strategy string) (string, bool) {
 	default:
 		return "", false
 	}
+}
+
+func defaultAuthPoolRoutingStrategy(strategy string) string {
+	normalized, ok := normalizeAuthPoolRoutingStrategy(strategy)
+	if !ok {
+		return "round-robin"
+	}
+	return normalized
+}
+
+// NormalizeAPIKeyAliases trims configured aliases and drops entries that do not
+// map to an existing configured client API key.
+func (cfg *Config) NormalizeAPIKeyAliases() {
+	if cfg == nil {
+		return
+	}
+
+	if len(cfg.APIKeyAliases) == 0 {
+		cfg.APIKeyAliases = nil
+		return
+	}
+
+	validKeys := make(map[string]struct{}, len(cfg.APIKeys))
+	for _, key := range cfg.APIKeys {
+		trimmedKey := strings.TrimSpace(key)
+		if trimmedKey == "" {
+			continue
+		}
+		validKeys[trimmedKey] = struct{}{}
+	}
+
+	if len(validKeys) == 0 {
+		cfg.APIKeyAliases = nil
+		return
+	}
+
+	normalized := make(map[string]string, len(cfg.APIKeyAliases))
+	for rawKey, rawAlias := range cfg.APIKeyAliases {
+		key := strings.TrimSpace(rawKey)
+		alias := strings.TrimSpace(rawAlias)
+		if key == "" || alias == "" {
+			continue
+		}
+		if _, ok := validKeys[key]; !ok {
+			continue
+		}
+		normalized[key] = alias
+	}
+
+	if len(normalized) == 0 {
+		cfg.APIKeyAliases = nil
+		return
+	}
+
+	cfg.APIKeyAliases = normalized
 }
 
 // SanitizePayloadRules validates raw JSON payload rule params and drops invalid rules.

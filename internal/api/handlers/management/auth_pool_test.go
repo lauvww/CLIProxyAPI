@@ -28,8 +28,18 @@ func TestPutCurrentAuthPoolPath(t *testing.T) {
 		t.Fatalf("failed to write config: %v", err)
 	}
 
-	cfg := &config.Config{AuthDir: poolA}
+	cfg := &config.Config{
+		AuthDir: poolA,
+		Routing: config.RoutingConfig{Strategy: "round-robin"},
+		AuthPool: config.AuthPoolConfig{
+			RoutingStrategyByPath: map[string]string{
+				poolA: "round-robin",
+				poolB: "fill-first",
+			},
+		},
+	}
 	cfg.SyncAuthPoolFromAuthDir()
+	cfg.SetAuthPoolEnabled(true)
 	h := NewHandler(cfg, configPath, nil)
 
 	recorder := httptest.NewRecorder()
@@ -51,6 +61,9 @@ func TestPutCurrentAuthPoolPath(t *testing.T) {
 	}
 	if cfg.AuthPool.ActivePath != poolB {
 		t.Fatalf("cfg.AuthPool.ActivePath = %q, want %q", cfg.AuthPool.ActivePath, poolB)
+	}
+	if cfg.Routing.Strategy != "fill-first" {
+		t.Fatalf("cfg.Routing.Strategy = %q, want %q", cfg.Routing.Strategy, "fill-first")
 	}
 	found := false
 	for _, path := range cfg.AuthPool.Paths {
@@ -78,6 +91,32 @@ func TestDeleteAuthPoolPathRejectsActivePath(t *testing.T) {
 		},
 	}
 	cfg.NormalizeAuthPool()
+	h := NewHandlerWithoutConfigFilePath(cfg, nil)
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodDelete, "/v0/management/auth-pool/paths?path="+url.QueryEscape(poolA), nil)
+
+	h.DeleteAuthPoolPath(ctx)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status code = %d, want %d", recorder.Code, http.StatusBadRequest)
+	}
+}
+
+func TestDeleteAuthPoolPathRejectsLastRemainingPath(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	tmpDir := t.TempDir()
+	poolA := filepath.Join(tmpDir, "pool-a")
+	cfg := &config.Config{
+		AuthDir: poolA,
+		AuthPool: config.AuthPoolConfig{
+			Paths: []string{poolA},
+		},
+	}
+	cfg.NormalizeAuthPool()
+	cfg.AuthPool.ActivePath = ""
 	h := NewHandlerWithoutConfigFilePath(cfg, nil)
 
 	recorder := httptest.NewRecorder()

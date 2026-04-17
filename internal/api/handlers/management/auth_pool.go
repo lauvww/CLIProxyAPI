@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/managementasset"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/pathutil"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
 )
@@ -54,6 +55,10 @@ func (h *Handler) respondWithAuthPoolState(c *gin.Context) {
 }
 
 func (h *Handler) persistAuthPoolState(c *gin.Context) bool {
+	if h != nil && h.cfg != nil {
+		h.cfg.NormalizeAuthPool()
+		managementasset.SetCurrentConfig(h.cfg)
+	}
 	if err := h.saveConfig(); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save config", "message": err.Error()})
 		return false
@@ -207,6 +212,10 @@ func (h *Handler) DeleteAuthPoolPath(c *gin.Context) {
 			continue
 		}
 		updated = append(updated, item)
+	}
+	if len(updated) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "at least one auth pool path must remain"})
+		return
 	}
 	h.cfg.AuthPool.Paths = updated
 	if h.cfg.AuthPool.RoutingStrategyByPath != nil {

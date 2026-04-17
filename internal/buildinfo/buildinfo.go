@@ -5,7 +5,7 @@ package buildinfo
 // Defaults cover local development builds.
 var (
 	// Version is the semantic version or git describe output of the binary.
-	Version = "1.0.0"
+	Version = "1.1.0"
 
 	// Commit is the git commit SHA baked into the binary.
 	Commit = "none"

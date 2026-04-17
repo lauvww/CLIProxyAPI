@@ -478,6 +478,7 @@ func (s *Service) Run(ctx context.Context) error {
 		ctx = context.Background()
 	}
 
+	internalusage.SetAPIKeyAliases(s.cfg.APIKeyAliases)
 	s.restorePersistedUsage(time.Now().UTC())
 	sdkusage.StartDefault(ctx)
 
@@ -649,6 +650,7 @@ func (s *Service) Run(ctx context.Context) error {
 
 		s.applyRetryConfig(newCfg)
 		s.applyPprofConfig(newCfg)
+		internalusage.SetAPIKeyAliases(newCfg.APIKeyAliases)
 		if s.server != nil {
 			s.server.UpdateClients(newCfg)
 		}

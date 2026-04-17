@@ -36,7 +36,7 @@ import (
 )
 
 var (
-	Version           = "1.0.0"
+	Version           = "1.1.0"
 	Commit            = "none"
 	BuildDate         = "local-build"
 	DefaultConfigPath = ""
@@ -452,6 +452,7 @@ func main() {
 		}
 	}
 	usage.SetStatisticsEnabled(cfg.UsageStatisticsEnabled)
+	usage.SetAPIKeyAliases(cfg.APIKeyAliases)
 	coreauth.SetQuotaCooldownDisabled(cfg.DisableCooling)
 
 	if err = logging.ConfigureLogOutput(cfg); err != nil {

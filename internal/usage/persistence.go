@@ -12,14 +12,16 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/pathutil"
 )
 
 const (
 	usagePersistenceDirName    = "use"
-	usagePersistenceFileName   = "usage-statistics"
 	usagePersistenceFileExt    = ".json"
 	usagePersistencePayloadVer = 1
 	usagePersistenceDefaultTag = "default"
+	usagePersistenceLegacyTag  = "usage-statistics"
 	usagePersistenceWindowsDir = `D:\CLIProxyAPI\use`
 	usagePersistenceDirEnv     = "CLIPROXYAPI_USAGE_DIR"
 )
@@ -38,9 +40,20 @@ func LoadRecentSnapshot(configPath string, authPool string, now time.Time, dayWi
 	raw, errRead := os.ReadFile(path)
 	if errRead != nil {
 		if errors.Is(errRead, os.ErrNotExist) {
-			return StatisticsSnapshot{}, path, false, nil
+			legacyPath := resolveLegacyPersistenceFilePath(configPath, authPool)
+			if legacyPath != path {
+				raw, errRead = os.ReadFile(legacyPath)
+				if errRead == nil {
+					path = legacyPath
+				}
+			}
 		}
-		return StatisticsSnapshot{}, path, false, fmt.Errorf("read usage persistence file: %w", errRead)
+		if errRead != nil {
+			if errors.Is(errRead, os.ErrNotExist) {
+				return StatisticsSnapshot{}, path, false, nil
+			}
+			return StatisticsSnapshot{}, path, false, fmt.Errorf("read usage persistence file: %w", errRead)
+		}
 	}
 
 	var payload persistedUsagePayload
@@ -153,13 +166,102 @@ func resolvePersistenceBaseDir(configPath string) string {
 }
 
 func resolvePersistenceFileName(authPool string) string {
+	fileTag := resolvePersistencePoolFileTag(authPool)
+	if fileTag == "" {
+		fileTag = usagePersistenceDefaultTag
+	}
+	return fileTag + usagePersistenceFileExt
+}
+
+func resolvePersistencePoolFileTag(authPool string) string {
+	normalizedPoolPath := pathutil.NormalizePath(authPool)
+	if normalizedPoolPath == "" {
+		return usagePersistenceDefaultTag
+	}
+
+	baseName := authPoolBaseName(normalizedPoolPath)
+	if baseName == "" {
+		return usagePersistenceDefaultTag
+	}
+
+	sanitized := sanitizePersistencePoolFileTag(baseName)
+	if sanitized == "" {
+		return usagePersistenceDefaultTag
+	}
+
+	return sanitized
+}
+
+func authPoolBaseName(authPool string) string {
+	slashPath := strings.ReplaceAll(strings.TrimSpace(authPool), "\\", "/")
+	if slashPath == "" {
+		return ""
+	}
+	if slashPath != "/" {
+		slashPath = strings.TrimRight(slashPath, "/")
+	}
+	if slashPath == "" || slashPath == "/" {
+		return ""
+	}
+
+	lastSlash := strings.LastIndex(slashPath, "/")
+	if lastSlash < 0 {
+		return slashPath
+	}
+
+	return slashPath[lastSlash+1:]
+}
+
+func sanitizePersistencePoolFileTag(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return ""
+	}
+
+	var builder strings.Builder
+	builder.Grow(len(trimmed))
+
+	for _, ch := range trimmed {
+		switch {
+		case ch < 32:
+			builder.WriteRune('_')
+		case strings.ContainsRune(`<>:"/\|?*`, ch):
+			builder.WriteRune('_')
+		default:
+			builder.WriteRune(ch)
+		}
+	}
+
+	sanitized := strings.TrimSpace(builder.String())
+	sanitized = strings.Trim(sanitized, ". ")
+	if sanitized == "" {
+		return ""
+	}
+
+	switch strings.ToUpper(sanitized) {
+	case "CON", "PRN", "AUX", "NUL",
+		"COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+		"LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9":
+		return "_" + sanitized
+	default:
+		return sanitized
+	}
+}
+
+func resolveLegacyPersistenceFilePath(configPath string, authPool string) string {
+	baseDir := resolvePersistenceBaseDir(configPath)
+	fileName := resolveLegacyPersistenceFileName(authPool)
+	return filepath.Join(baseDir, fileName)
+}
+
+func resolveLegacyPersistenceFileName(authPool string) string {
 	normalizedPool := normalizeAuthPool(authPool)
 	if normalizedPool == "" {
-		return usagePersistenceFileName + "." + usagePersistenceDefaultTag + usagePersistenceFileExt
+		return usagePersistenceLegacyTag + "." + usagePersistenceDefaultTag + usagePersistenceFileExt
 	}
 	hash := sha256.Sum256([]byte(strings.ToLower(normalizedPool)))
 	shortHash := hex.EncodeToString(hash[:8])
-	return usagePersistenceFileName + "." + shortHash + usagePersistenceFileExt
+	return usagePersistenceLegacyTag + "." + shortHash + usagePersistenceFileExt
 }
 
 func filterSnapshotSince(snapshot StatisticsSnapshot, since time.Time) StatisticsSnapshot {
