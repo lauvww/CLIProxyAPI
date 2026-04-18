@@ -19,6 +19,9 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/browser"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/cmd"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/usage"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
+	coreauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/sys/windows"
 )
@@ -52,12 +55,50 @@ type trayServiceController struct {
 }
 
 func newTrayServiceController(cfg *config.Config, configPath, password string, port int) *trayServiceController {
+	startConfigPath := strings.TrimSpace(configPath)
 	return &trayServiceController{
 		port: port,
 		startFn: func() *cmd.BackgroundServiceHandle {
-			return cmd.StartServiceBackgroundHandle(cfg, configPath, password)
+			runtimeCfg, err := loadTrayServiceConfig(cfg, startConfigPath)
+			if err != nil {
+				log.WithError(err).Warn("failed to reload config for tray service start; using last known config")
+				runtimeCfg = cloneTrayConfig(cfg)
+			}
+			return cmd.StartServiceBackgroundHandle(runtimeCfg, startConfigPath, password)
 		},
 	}
+}
+
+func loadTrayServiceConfig(fallbackCfg *config.Config, configPath string) (*config.Config, error) {
+	if strings.TrimSpace(configPath) == "" {
+		return cloneTrayConfig(fallbackCfg), nil
+	}
+
+	cfg, err := config.LoadConfig(configPath)
+	if err != nil {
+		return nil, fmt.Errorf("load config for tray restart: %w", err)
+	}
+	if cfg == nil {
+		return cloneTrayConfig(fallbackCfg), nil
+	}
+
+	resolvedAuthDir, err := util.ResolveAuthDir(cfg.AuthDir)
+	if err != nil {
+		return nil, fmt.Errorf("resolve auth directory for tray restart: %w", err)
+	}
+	cfg.AuthDir = resolvedAuthDir
+	cfg.SyncAuthPoolFromAuthDir()
+	usage.SetStatisticsEnabled(cfg.UsageStatisticsEnabled)
+	coreauth.SetQuotaCooldownDisabled(cfg.DisableCooling)
+	return cfg, nil
+}
+
+func cloneTrayConfig(cfg *config.Config) *config.Config {
+	if cfg == nil {
+		return &config.Config{}
+	}
+	copyCfg := *cfg
+	return &copyCfg
 }
 
 func (c *trayServiceController) ensureRunning() error {
