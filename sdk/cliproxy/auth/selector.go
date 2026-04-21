@@ -4,17 +4,22 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"math"
 	"math/rand/v2"
 	"net/http"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/thinking"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/executor"
+	log "github.com/sirupsen/logrus"
+	"github.com/tidwall/gjson"
 )
 
 // RoundRobinSelector provides a simple provider scoped round-robin selection strategy.
@@ -419,4 +424,380 @@ func isAuthBlockedForModel(auth *Auth, model string, now time.Time) (bool, block
 		return true, blockReasonOther, next
 	}
 	return false, blockReasonNone, time.Time{}
+}
+
+var sessionPattern = regexp.MustCompile(`_session_([a-f0-9-]+)$`)
+
+// SessionAffinitySelector wraps another selector with session-sticky routing.
+type SessionAffinitySelector struct {
+	fallback Selector
+	cache    *SessionCache
+}
+
+// SessionAffinityConfig configures a session-affinity selector.
+type SessionAffinityConfig struct {
+	Fallback Selector
+	TTL      time.Duration
+}
+
+func NewSessionAffinitySelector(fallback Selector) *SessionAffinitySelector {
+	return NewSessionAffinitySelectorWithConfig(SessionAffinityConfig{
+		Fallback: fallback,
+		TTL:      time.Hour,
+	})
+}
+
+func NewSessionAffinitySelectorWithConfig(cfg SessionAffinityConfig) *SessionAffinitySelector {
+	if cfg.Fallback == nil {
+		cfg.Fallback = &RoundRobinSelector{}
+	}
+	if cfg.TTL <= 0 {
+		cfg.TTL = time.Hour
+	}
+	return &SessionAffinitySelector{
+		fallback: cfg.Fallback,
+		cache:    NewSessionCache(cfg.TTL),
+	}
+}
+
+func (s *SessionAffinitySelector) Pick(ctx context.Context, provider, model string, opts cliproxyexecutor.Options, auths []*Auth) (*Auth, error) {
+	entry := selectorLogEntry(ctx)
+	primaryID, fallbackID := extractSessionIDs(opts.Headers, opts.OriginalRequest, opts.Metadata)
+	if primaryID == "" {
+		entry.Debugf("session-affinity: no session ID extracted, falling back to default selector | provider=%s model=%s", provider, model)
+		return s.fallback.Pick(ctx, provider, model, opts, auths)
+	}
+
+	now := time.Now()
+	available, err := getAvailableAuths(auths, provider, model, now)
+	if err != nil {
+		return nil, err
+	}
+
+	cacheKey := provider + "::" + primaryID + "::" + model
+	if cachedAuthID, ok := s.cache.GetAndRefresh(cacheKey); ok {
+		for _, auth := range available {
+			if auth.ID == cachedAuthID {
+				entry.Debugf("session-affinity: cache hit | session=%s auth=%s provider=%s model=%s", truncateSessionID(primaryID), auth.ID, provider, model)
+				return auth, nil
+			}
+		}
+
+		auth, errPick := s.fallback.Pick(ctx, provider, model, opts, auths)
+		if errPick != nil {
+			return nil, errPick
+		}
+		s.cache.Set(cacheKey, auth.ID)
+		entry.Debugf("session-affinity: cache hit but auth unavailable, reselected | session=%s auth=%s provider=%s model=%s", truncateSessionID(primaryID), auth.ID, provider, model)
+		return auth, nil
+	}
+
+	if fallbackID != "" && fallbackID != primaryID {
+		fallbackKey := provider + "::" + fallbackID + "::" + model
+		if cachedAuthID, ok := s.cache.Get(fallbackKey); ok {
+			for _, auth := range available {
+				if auth.ID == cachedAuthID {
+					s.cache.Set(cacheKey, auth.ID)
+					entry.Debugf("session-affinity: fallback cache hit | session=%s fallback=%s auth=%s provider=%s model=%s", truncateSessionID(primaryID), truncateSessionID(fallbackID), auth.ID, provider, model)
+					return auth, nil
+				}
+			}
+		}
+	}
+
+	auth, errPick := s.fallback.Pick(ctx, provider, model, opts, auths)
+	if errPick != nil {
+		return nil, errPick
+	}
+	s.cache.Set(cacheKey, auth.ID)
+	entry.Debugf("session-affinity: cache miss, new binding | session=%s auth=%s provider=%s model=%s", truncateSessionID(primaryID), auth.ID, provider, model)
+	return auth, nil
+}
+
+func (s *SessionAffinitySelector) Stop() {
+	if s == nil || s.cache == nil {
+		return
+	}
+	s.cache.Stop()
+}
+
+func (s *SessionAffinitySelector) InvalidateAuth(authID string) {
+	if s == nil || s.cache == nil {
+		return
+	}
+	s.cache.InvalidateAuth(authID)
+}
+
+func ExtractSessionID(headers http.Header, payload []byte, metadata map[string]any) string {
+	primaryID, _ := extractSessionIDs(headers, payload, metadata)
+	return primaryID
+}
+
+func extractSessionIDs(headers http.Header, payload []byte, metadata map[string]any) (string, string) {
+	if len(payload) > 0 {
+		userID := gjson.GetBytes(payload, "metadata.user_id").String()
+		if userID != "" {
+			if matches := sessionPattern.FindStringSubmatch(userID); len(matches) >= 2 {
+				return "claude:" + matches[1], ""
+			}
+			if len(userID) > 0 && userID[0] == '{' {
+				if sessionID := gjson.Get(userID, "session_id").String(); sessionID != "" {
+					return "claude:" + sessionID, ""
+				}
+			}
+		}
+	}
+
+	if headers != nil {
+		if sessionID := strings.TrimSpace(headers.Get("X-Session-ID")); sessionID != "" {
+			return "header:" + sessionID, ""
+		}
+	}
+
+	if len(payload) == 0 {
+		return "", ""
+	}
+
+	userID := gjson.GetBytes(payload, "metadata.user_id").String()
+	if userID != "" {
+		return "user:" + userID, ""
+	}
+
+	if conversationID := gjson.GetBytes(payload, "conversation_id").String(); conversationID != "" {
+		return "conv:" + conversationID, ""
+	}
+
+	return extractMessageHashIDs(payload)
+}
+
+func extractMessageHashIDs(payload []byte) (string, string) {
+	var systemPrompt string
+	var firstUserMsg string
+	var firstAssistantMsg string
+
+	messages := gjson.GetBytes(payload, "messages")
+	if messages.Exists() && messages.IsArray() {
+		messages.ForEach(func(_, msg gjson.Result) bool {
+			role := msg.Get("role").String()
+			content := extractMessageContent(msg.Get("content"))
+			if content == "" {
+				return true
+			}
+			switch role {
+			case "system":
+				if systemPrompt == "" {
+					systemPrompt = truncateString(content, 100)
+				}
+			case "user":
+				if firstUserMsg == "" {
+					firstUserMsg = truncateString(content, 100)
+				}
+			case "assistant":
+				if firstAssistantMsg == "" {
+					firstAssistantMsg = truncateString(content, 100)
+				}
+			}
+			return systemPrompt == "" || firstUserMsg == "" || firstAssistantMsg == ""
+		})
+	}
+
+	if systemPrompt == "" {
+		topSystem := gjson.GetBytes(payload, "system")
+		if topSystem.Exists() {
+			if topSystem.IsArray() {
+				topSystem.ForEach(func(_, part gjson.Result) bool {
+					if text := part.Get("text").String(); text != "" && systemPrompt == "" {
+						systemPrompt = truncateString(text, 100)
+						return false
+					}
+					return true
+				})
+			} else if topSystem.Type == gjson.String {
+				systemPrompt = truncateString(topSystem.String(), 100)
+			}
+		}
+	}
+
+	if systemPrompt == "" && firstUserMsg == "" {
+		systemInstruction := gjson.GetBytes(payload, "systemInstruction.parts")
+		if systemInstruction.Exists() && systemInstruction.IsArray() {
+			systemInstruction.ForEach(func(_, part gjson.Result) bool {
+				if text := part.Get("text").String(); text != "" && systemPrompt == "" {
+					systemPrompt = truncateString(text, 100)
+					return false
+				}
+				return true
+			})
+		}
+
+		contents := gjson.GetBytes(payload, "contents")
+		if contents.Exists() && contents.IsArray() {
+			contents.ForEach(func(_, msg gjson.Result) bool {
+				role := msg.Get("role").String()
+				msg.Get("parts").ForEach(func(_, part gjson.Result) bool {
+					text := part.Get("text").String()
+					if text == "" {
+						return true
+					}
+					switch role {
+					case "user":
+						if firstUserMsg == "" {
+							firstUserMsg = truncateString(text, 100)
+						}
+					case "model":
+						if firstAssistantMsg == "" {
+							firstAssistantMsg = truncateString(text, 100)
+						}
+					}
+					return false
+				})
+				return firstUserMsg == "" || firstAssistantMsg == ""
+			})
+		}
+	}
+
+	if systemPrompt == "" && firstUserMsg == "" {
+		if instructions := gjson.GetBytes(payload, "instructions").String(); instructions != "" {
+			systemPrompt = truncateString(instructions, 100)
+		}
+
+		input := gjson.GetBytes(payload, "input")
+		if input.Exists() && input.IsArray() {
+			input.ForEach(func(_, item gjson.Result) bool {
+				itemType := item.Get("type").String()
+				if itemType == "reasoning" {
+					return true
+				}
+				if itemType != "" && itemType != "message" {
+					return true
+				}
+
+				role := item.Get("role").String()
+				if itemType == "" && role == "" {
+					return true
+				}
+
+				content := item.Get("content")
+				text := ""
+				if content.Type == gjson.String {
+					text = content.String()
+				} else {
+					text = extractResponsesAPIContent(content)
+				}
+				if text == "" {
+					return true
+				}
+
+				switch role {
+				case "developer", "system":
+					if systemPrompt == "" {
+						systemPrompt = truncateString(text, 100)
+					}
+				case "user":
+					if firstUserMsg == "" {
+						firstUserMsg = truncateString(text, 100)
+					}
+				case "assistant":
+					if firstAssistantMsg == "" {
+						firstAssistantMsg = truncateString(text, 100)
+					}
+				}
+
+				return firstUserMsg == "" || firstAssistantMsg == ""
+			})
+		}
+	}
+
+	if systemPrompt == "" && firstUserMsg == "" {
+		return "", ""
+	}
+
+	shortHash := computeSessionHash(systemPrompt, firstUserMsg, "")
+	if firstAssistantMsg == "" {
+		return shortHash, ""
+	}
+
+	fullHash := computeSessionHash(systemPrompt, firstUserMsg, firstAssistantMsg)
+	return fullHash, shortHash
+}
+
+func computeSessionHash(systemPrompt, userMsg, assistantMsg string) string {
+	hasher := fnv.New64a()
+	if systemPrompt != "" {
+		_, _ = hasher.Write([]byte("sys:" + systemPrompt + "\n"))
+	}
+	if userMsg != "" {
+		_, _ = hasher.Write([]byte("usr:" + userMsg + "\n"))
+	}
+	if assistantMsg != "" {
+		_, _ = hasher.Write([]byte("ast:" + assistantMsg + "\n"))
+	}
+	return fmt.Sprintf("msg:%016x", hasher.Sum64())
+}
+
+func truncateString(value string, maxLen int) string {
+	if len(value) > maxLen {
+		return value[:maxLen]
+	}
+	return value
+}
+
+func extractMessageContent(content gjson.Result) string {
+	if content.Type == gjson.String {
+		return content.String()
+	}
+
+	if content.IsArray() {
+		texts := make([]string, 0)
+		content.ForEach(func(_, part gjson.Result) bool {
+			if part.Get("type").String() == "text" {
+				if text := part.Get("text").String(); text != "" {
+					texts = append(texts, text)
+				}
+			}
+			return true
+		})
+		if len(texts) > 0 {
+			return strings.Join(texts, " ")
+		}
+	}
+
+	return ""
+}
+
+func extractResponsesAPIContent(content gjson.Result) string {
+	if !content.IsArray() {
+		return ""
+	}
+	texts := make([]string, 0)
+	content.ForEach(func(_, part gjson.Result) bool {
+		partType := part.Get("type").String()
+		if partType == "input_text" || partType == "output_text" || partType == "text" {
+			if text := part.Get("text").String(); text != "" {
+				texts = append(texts, text)
+			}
+		}
+		return true
+	})
+	if len(texts) > 0 {
+		return strings.Join(texts, " ")
+	}
+	return ""
+}
+
+func selectorLogEntry(ctx context.Context) *log.Entry {
+	if ctx == nil {
+		return log.NewEntry(log.StandardLogger())
+	}
+	if requestID := logging.GetRequestID(ctx); requestID != "" {
+		return log.WithField("request_id", requestID)
+	}
+	return log.NewEntry(log.StandardLogger())
+}
+
+func truncateSessionID(sessionID string) string {
+	if len(sessionID) <= 20 {
+		return sessionID
+	}
+	return sessionID[:8] + "..."
 }

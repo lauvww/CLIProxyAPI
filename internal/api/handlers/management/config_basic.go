@@ -31,7 +31,8 @@ func (h *Handler) GetConfig(c *gin.Context) {
 		c.JSON(200, gin.H{})
 		return
 	}
-	c.JSON(200, new(*h.cfg))
+	cfgCopy := *h.cfg
+	c.JSON(200, &cfgCopy)
 }
 
 type releaseInfo struct {
@@ -252,6 +253,7 @@ func (h *Handler) PutConfigYAML(c *gin.Context) {
 		return
 	}
 	h.cfg = newCfg
+	h.applyConfigUpdate()
 	c.JSON(http.StatusOK, gin.H{"ok": true, "changed": []string{"config"}})
 }
 

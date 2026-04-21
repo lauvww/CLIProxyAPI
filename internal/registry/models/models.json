@@ -73,6 +73,29 @@
       }
     },
     {
+      "id": "claude-opus-4-7",
+      "object": "model",
+      "created": 1776297600,
+      "owned_by": "anthropic",
+      "type": "claude",
+      "display_name": "Claude Opus 4.7",
+      "description": "Premium model combining maximum intelligence with practical performance",
+      "context_length": 1000000,
+      "max_completion_tokens": 128000,
+      "thinking": {
+        "min": 1024,
+        "max": 128000,
+        "zero_allowed": true,
+        "levels": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      }
+    },
+    {
       "id": "claude-opus-4-5-20251101",
       "object": "model",
       "created": 1761955200,
@@ -2714,6 +2737,29 @@
         "dynamic_allowed": true,
         "levels": [
           "minimal",
+          "high"
+        ]
+      }
+    },
+    {
+      "id": "gemini-3.1-flash-lite",
+      "object": "model",
+      "owned_by": "antigravity",
+      "type": "antigravity",
+      "display_name": "Gemini 3.1 Flash Lite",
+      "name": "gemini-3.1-flash-lite",
+      "description": "Gemini 3.1 Flash Lite",
+      "context_length": 1048576,
+      "max_completion_tokens": 65535,
+      "thinking": {
+        "min": 1,
+        "max": 65535,
+        "zero_allowed": true,
+        "dynamic_allowed": true,
+        "levels": [
+          "minimal",
+          "low",
+          "medium",
           "high"
         ]
       }

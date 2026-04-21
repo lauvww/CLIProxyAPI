@@ -105,6 +105,12 @@ type Selector interface {
 	Pick(ctx context.Context, provider, model string, opts cliproxyexecutor.Options, auths []*Auth) (*Auth, error)
 }
 
+// StoppableSelector is an optional lifecycle hook for selectors that hold resources.
+type StoppableSelector interface {
+	Selector
+	Stop()
+}
+
 // Hook captures lifecycle callbacks for observing auth changes.
 type Hook interface {
 	// OnAuthRegistered fires when a new auth is registered.
@@ -328,9 +334,14 @@ func (m *Manager) SetSelector(selector Selector) {
 	if selector == nil {
 		selector = &RoundRobinSelector{}
 	}
+	var previous Selector
 	m.mu.Lock()
+	previous = m.selector
 	m.selector = selector
 	m.mu.Unlock()
+	if stoppable, ok := previous.(StoppableSelector); ok && previous != nil {
+		stoppable.Stop()
+	}
 	if m.scheduler != nil {
 		m.scheduler.setSelector(selector)
 		m.syncScheduler()
@@ -2960,9 +2971,13 @@ func (m *Manager) StopAutoRefresh() {
 	cancel := m.refreshCancel
 	m.refreshCancel = nil
 	m.refreshLoop = nil
+	selector := m.selector
 	m.mu.Unlock()
 	if cancel != nil {
 		cancel()
+	}
+	if stoppable, ok := selector.(StoppableSelector); ok && selector != nil {
+		stoppable.Stop()
 	}
 }
 

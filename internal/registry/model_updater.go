@@ -34,7 +34,14 @@ type modelStore struct {
 
 var modelsCatalogStore = &modelStore{}
 
-var updaterOnce sync.Once
+type modelsUpdaterController struct {
+	mu     sync.Mutex
+	cancel context.CancelFunc
+	done   chan struct{}
+	active bool
+}
+
+var updaterController modelsUpdaterController
 
 // ModelRefreshCallback is invoked when startup or periodic model refresh detects changes.
 // changedProviders contains the provider names whose model definitions changed.
@@ -71,13 +78,72 @@ func init() {
 	}
 }
 
-// StartModelsUpdater starts a background updater that fetches models
-// immediately on startup and then refreshes the model catalog every 3 hours.
-// Safe to call multiple times; only one updater will run.
-func StartModelsUpdater(ctx context.Context) {
-	updaterOnce.Do(func() {
-		go runModelsUpdater(ctx)
-	})
+// StartModelsUpdater starts a background updater that fetches models immediately
+// and then refreshes the model catalog every 3 hours. Safe to call multiple
+// times; only one updater will run.
+func StartModelsUpdater(ctx context.Context) bool {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	updaterController.mu.Lock()
+	if updaterController.active {
+		updaterController.mu.Unlock()
+		return false
+	}
+
+	runCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	updaterController.cancel = cancel
+	updaterController.done = done
+	updaterController.active = true
+	updaterController.mu.Unlock()
+
+	go func() {
+		defer close(done)
+		runModelsUpdater(runCtx)
+	}()
+	return true
+}
+
+// StopModelsUpdater stops the active background updater, if any, and waits for
+// its goroutine to exit.
+func StopModelsUpdater() bool {
+	updaterController.mu.Lock()
+	if !updaterController.active {
+		updaterController.mu.Unlock()
+		return false
+	}
+
+	cancel := updaterController.cancel
+	done := updaterController.done
+	updaterController.cancel = nil
+	updaterController.done = nil
+	updaterController.active = false
+	updaterController.mu.Unlock()
+
+	if cancel != nil {
+		cancel()
+	}
+	if done != nil {
+		<-done
+	}
+	return true
+}
+
+// SetModelsUpdaterEnabled toggles the updater without restarting the process.
+func SetModelsUpdaterEnabled(ctx context.Context, enabled bool) bool {
+	if enabled {
+		return StartModelsUpdater(ctx)
+	}
+	return StopModelsUpdater()
+}
+
+// ModelsUpdaterEnabled reports whether the updater is currently running.
+func ModelsUpdaterEnabled() bool {
+	updaterController.mu.Lock()
+	defer updaterController.mu.Unlock()
+	return updaterController.active
 }
 
 func runModelsUpdater(ctx context.Context) {

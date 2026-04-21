@@ -86,6 +86,7 @@ type WatcherWrapper struct {
 	stop  func() error
 
 	setConfig             func(cfg *config.Config)
+	applyConfig           func(cfg *config.Config)
 	snapshotAuths         func() []*coreauth.Auth
 	setUpdateQueue        func(queue chan<- watcher.AuthUpdate)
 	dispatchRuntimeUpdate func(update watcher.AuthUpdate) bool
@@ -113,6 +114,15 @@ func (w *WatcherWrapper) SetConfig(cfg *config.Config) {
 		return
 	}
 	w.setConfig(cfg)
+}
+
+// ApplyConfig updates the watcher config cache and hot-switches the auth
+// directory when needed.
+func (w *WatcherWrapper) ApplyConfig(cfg *config.Config) {
+	if w == nil || w.applyConfig == nil {
+		return
+	}
+	w.applyConfig(cfg)
 }
 
 // DispatchRuntimeAuthUpdate forwards runtime auth updates (e.g., websocket providers)

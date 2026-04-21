@@ -148,7 +148,7 @@ try {
     }
   }
 
-  & $goExe build -ldflags "-s -w -X main.Version=$version -X main.Commit=$commit -X main.BuildDate=$buildDate" -o $output ./cmd/server
+  & $goExe build -ldflags "-s -w -X main.Version=$version -X main.Commit=$commit -X main.BuildDate=$buildDate -X main.DefaultLocalModel=true" -o $output ./cmd/server
   Write-Host "Built $output"
   Write-Host "Version: $version"
   Write-Host "Commit: $commit"

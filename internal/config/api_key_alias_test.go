@@ -2,7 +2,7 @@ package config
 
 import "testing"
 
-func TestNormalizeAPIKeyAliasesDropsUnknownOrEmptyEntries(t *testing.T) {
+func TestNormalizeAPIKeyAliasesKeepsNonEmptyEntries(t *testing.T) {
 	cfg := &Config{
 		SDKConfig: SDKConfig{
 			APIKeys: []string{" key-a ", "key-b"},
@@ -17,10 +17,13 @@ func TestNormalizeAPIKeyAliasesDropsUnknownOrEmptyEntries(t *testing.T) {
 
 	cfg.NormalizeAPIKeyAliases()
 
-	if len(cfg.APIKeyAliases) != 1 {
-		t.Fatalf("len(APIKeyAliases) = %d, want 1 (%#v)", len(cfg.APIKeyAliases), cfg.APIKeyAliases)
+	if len(cfg.APIKeyAliases) != 2 {
+		t.Fatalf("len(APIKeyAliases) = %d, want 2 (%#v)", len(cfg.APIKeyAliases), cfg.APIKeyAliases)
 	}
 	if got := cfg.APIKeyAliases["key-a"]; got != "Desktop" {
 		t.Fatalf("APIKeyAliases[key-a] = %q, want %q", got, "Desktop")
+	}
+	if got := cfg.APIKeyAliases["key-c"]; got != "Unknown" {
+		t.Fatalf("APIKeyAliases[key-c] = %q, want %q", got, "Unknown")
 	}
 }

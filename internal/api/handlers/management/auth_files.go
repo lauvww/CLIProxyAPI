@@ -328,38 +328,136 @@ func (h *Handler) shouldIncludeAuthFileEntry(entry gin.H) bool {
 	return h.isPathInCurrentAuthPool(path)
 }
 
+func authFileEntryBelongsToScope(entry gin.H, scopePath string) bool {
+	if entry == nil {
+		return false
+	}
+	scopePath = strings.TrimSpace(pathutil.NormalizePath(scopePath))
+	if scopePath == "" {
+		return true
+	}
+
+	path, _ := entry["path"].(string)
+	path = strings.TrimSpace(pathutil.NormalizePath(path))
+	if path == "" {
+		return false
+	}
+
+	return pathutil.IsWithinScope(path, scopePath)
+}
+
+func (h *Handler) respondAuthFilesForScope(c *gin.Context, files []gin.H, viewedAuthPool string) {
+	currentAuthPool := strings.TrimSpace(h.currentAuthPoolScope())
+	viewedAuthPool = strings.TrimSpace(pathutil.NormalizePath(viewedAuthPool))
+	if viewedAuthPool == "" {
+		viewedAuthPool = currentAuthPool
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"files":             files,
+		"total":             len(files),
+		"current_auth_pool": currentAuthPool,
+		"viewed_auth_pool":  viewedAuthPool,
+		"auth_pool_enabled": h != nil && h.cfg != nil && h.cfg.AuthPool.Enabled,
+		"readonly":          viewedAuthPool != "" && !pathutil.PathsEqual(viewedAuthPool, currentAuthPool),
+	})
+}
+
+func (h *Handler) collectAuthFileEntriesFromManager(scopePath string) []gin.H {
+	if h == nil || h.authManager == nil {
+		return nil
+	}
+
+	files := make([]gin.H, 0)
+	auths := h.authManager.List()
+	for _, auth := range auths {
+		entry := h.buildAuthFileEntry(auth)
+		if entry == nil || !authFileEntryBelongsToScope(entry, scopePath) {
+			continue
+		}
+		files = append(files, entry)
+	}
+
+	sort.Slice(files, func(i, j int) bool {
+		nameI, _ := files[i]["name"].(string)
+		nameJ, _ := files[j]["name"].(string)
+		return strings.ToLower(nameI) < strings.ToLower(nameJ)
+	})
+
+	return files
+}
+
 func (h *Handler) ListAuthFiles(c *gin.Context) {
 	if h == nil {
 		c.JSON(500, gin.H{"error": "handler not initialized"})
 		return
 	}
 	currentAuthPool := strings.TrimSpace(h.currentAuthPoolScope())
-	authPoolEnabled := h != nil && h.cfg != nil && h.cfg.AuthPool.Enabled
 	if h.authManager == nil {
 		h.listAuthFilesFromDisk(c)
 		return
 	}
-	auths := h.authManager.List()
-	files := make([]gin.H, 0, len(auths))
-	for _, auth := range auths {
-		if entry := h.buildAuthFileEntry(auth); entry != nil {
-			if !h.shouldIncludeAuthFileEntry(entry) {
-				continue
+
+	files := h.collectAuthFileEntriesFromManager(currentAuthPool)
+	h.respondAuthFilesForScope(c, files, currentAuthPool)
+}
+
+// GetAuthPoolFiles returns a read-only auth file list for the requested auth pool path.
+func (h *Handler) GetAuthPoolFiles(c *gin.Context) {
+	if h == nil || h.cfg == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "config unavailable"})
+		return
+	}
+
+	targetPath := strings.TrimSpace(c.Query("path"))
+	if targetPath == "" {
+		targetPath = h.currentAuthPoolScope()
+	}
+
+	resolved, err := resolveAndNormalizeAuthPoolPath(targetPath)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if resolved == "" {
+		resolved = pathutil.NormalizePath(h.cfg.AuthDir)
+	}
+	if resolved == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "auth pool path is required"})
+		return
+	}
+
+	allowed := false
+	if h.cfg.AuthPool.Enabled {
+		for _, path := range h.cfg.AuthPool.Paths {
+			if pathutil.PathsEqual(path, resolved) {
+				allowed = true
+				break
 			}
-			files = append(files, entry)
 		}
 	}
-	sort.Slice(files, func(i, j int) bool {
-		nameI, _ := files[i]["name"].(string)
-		nameJ, _ := files[j]["name"].(string)
-		return strings.ToLower(nameI) < strings.ToLower(nameJ)
-	})
-	c.JSON(200, gin.H{
-		"files":             files,
-		"total":             len(files),
-		"current_auth_pool": currentAuthPool,
-		"auth_pool_enabled": authPoolEnabled,
-	})
+	if !allowed {
+		allowed = pathutil.PathsEqual(h.cfg.AuthDir, resolved) || pathutil.PathsEqual(h.cfg.CurrentAuthPoolPath(), resolved)
+	}
+	if !allowed {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "requested auth pool path is not configured"})
+		return
+	}
+
+	currentAuthPool := strings.TrimSpace(h.currentAuthPoolScope())
+	if currentAuthPool != "" && pathutil.PathsEqual(currentAuthPool, resolved) && h.authManager != nil {
+		files := h.collectAuthFileEntriesFromManager(resolved)
+		h.respondAuthFilesForScope(c, files, resolved)
+		return
+	}
+
+	files, err := h.collectAuthFilesFromDiskDir(resolved)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to read auth dir: %v", err)})
+		return
+	}
+
+	h.respondAuthFilesForScope(c, files, resolved)
 }
 
 // GetAuthFileModels returns the models supported by a specific auth file
@@ -407,13 +505,17 @@ func (h *Handler) GetAuthFileModels(c *gin.Context) {
 	c.JSON(200, gin.H{"models": result})
 }
 
-// List auth files from disk when the auth manager is unavailable.
-func (h *Handler) listAuthFilesFromDisk(c *gin.Context) {
-	entries, err := os.ReadDir(h.cfg.AuthDir)
-	if err != nil {
-		c.JSON(500, gin.H{"error": fmt.Sprintf("failed to read auth dir: %v", err)})
-		return
+func (h *Handler) collectAuthFilesFromDiskDir(dir string) ([]gin.H, error) {
+	dir = strings.TrimSpace(pathutil.NormalizePath(dir))
+	if dir == "" {
+		dir = strings.TrimSpace(pathutil.NormalizePath(h.cfg.AuthDir))
 	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+
 	files := make([]gin.H, 0)
 	for _, e := range entries {
 		if e.IsDir() {
@@ -424,7 +526,7 @@ func (h *Handler) listAuthFilesFromDisk(c *gin.Context) {
 			continue
 		}
 		if info, errInfo := e.Info(); errInfo == nil {
-			full := filepath.Join(h.cfg.AuthDir, name)
+			full := filepath.Join(dir, name)
 			fileData := gin.H{
 				"name":          name,
 				"size":          info.Size(),
@@ -437,12 +539,28 @@ func (h *Handler) listAuthFilesFromDisk(c *gin.Context) {
 				"source":        "file",
 			}
 
-			// Read file to get type field
+			// Read file to extract lightweight metadata for view mode.
 			if data, errRead := os.ReadFile(full); errRead == nil {
 				typeValue := gjson.GetBytes(data, "type").String()
 				emailValue := gjson.GetBytes(data, "email").String()
+				providerValue := gjson.GetBytes(data, "provider").String()
+				labelValue := gjson.GetBytes(data, "label").String()
+				planTypeValue := strings.TrimSpace(gjson.GetBytes(data, "plan_type").String())
+				if planTypeValue == "" {
+					planTypeValue = strings.TrimSpace(gjson.GetBytes(data, "planType").String())
+				}
 				fileData["type"] = typeValue
 				fileData["email"] = emailValue
+				if providerValue != "" {
+					fileData["provider"] = providerValue
+				}
+				if labelValue != "" {
+					fileData["label"] = labelValue
+				}
+				if planTypeValue != "" {
+					fileData["plan_type"] = planTypeValue
+					fileData["planType"] = planTypeValue
+				}
 				authIndexCandidates := []string{
 					strings.TrimSpace(gjson.GetBytes(data, "auth_index").String()),
 					strings.TrimSpace(gjson.GetBytes(data, "authIndex").String()),
@@ -471,17 +589,30 @@ func (h *Handler) listAuthFilesFromDisk(c *gin.Context) {
 				}
 			}
 
-			if h.shouldIncludeAuthFileEntry(fileData) {
+			if authFileEntryBelongsToScope(fileData, dir) {
 				files = append(files, fileData)
 			}
 		}
 	}
-	c.JSON(200, gin.H{
-		"files":             files,
-		"total":             len(files),
-		"current_auth_pool": strings.TrimSpace(h.currentAuthPoolScope()),
-		"auth_pool_enabled": h != nil && h.cfg != nil && h.cfg.AuthPool.Enabled,
+
+	sort.Slice(files, func(i, j int) bool {
+		nameI, _ := files[i]["name"].(string)
+		nameJ, _ := files[j]["name"].(string)
+		return strings.ToLower(nameI) < strings.ToLower(nameJ)
 	})
+
+	return files, nil
+}
+
+// List auth files from disk when the auth manager is unavailable.
+func (h *Handler) listAuthFilesFromDisk(c *gin.Context) {
+	files, err := h.collectAuthFilesFromDiskDir(h.cfg.AuthDir)
+	if err != nil {
+		c.JSON(500, gin.H{"error": fmt.Sprintf("failed to read auth dir: %v", err)})
+		return
+	}
+
+	h.respondAuthFilesForScope(c, files, h.currentAuthPoolScope())
 }
 
 func (h *Handler) buildAuthFileEntry(auth *coreauth.Auth) gin.H {

@@ -53,6 +53,7 @@ type serverOptionConfig struct {
 	keepAliveTimeout     time.Duration
 	keepAliveOnTimeout   func()
 	postAuthHook         auth.PostAuthHook
+	configApplyHook      func(*config.Config)
 }
 
 // ServerOption customises HTTP server construction.
@@ -115,6 +116,14 @@ func WithRequestLoggerFactory(factory func(*config.Config, string) logging.Reque
 func WithPostAuthHook(hook auth.PostAuthHook) ServerOption {
 	return func(cfg *serverOptionConfig) {
 		cfg.postAuthHook = hook
+	}
+}
+
+// WithConfigApplyHook registers a hook that applies persisted config changes to
+// the running service immediately after management writes config to disk.
+func WithConfigApplyHook(hook func(*config.Config)) ServerOption {
+	return func(cfg *serverOptionConfig) {
+		cfg.configApplyHook = hook
 	}
 }
 
@@ -272,6 +281,9 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 	s.mgmt.SetLogDirectory(logDir)
 	if optionState.postAuthHook != nil {
 		s.mgmt.SetPostAuthHook(optionState.postAuthHook)
+	}
+	if optionState.configApplyHook != nil {
+		s.mgmt.SetConfigApplyHook(optionState.configApplyHook)
 	}
 	s.localPassword = optionState.localPassword
 
@@ -597,6 +609,7 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.PATCH("/routing/strategy", s.mgmt.PutRoutingStrategy)
 
 		mgmt.GET("/auth-pool", s.mgmt.GetAuthPool)
+		mgmt.GET("/auth-pool/files", s.mgmt.GetAuthPoolFiles)
 		mgmt.PUT("/auth-pool/enabled", s.mgmt.PutAuthPoolEnabled)
 		mgmt.PATCH("/auth-pool/enabled", s.mgmt.PutAuthPoolEnabled)
 		mgmt.POST("/auth-pool/paths", s.mgmt.AddAuthPoolPath)

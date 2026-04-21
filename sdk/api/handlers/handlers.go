@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/interfaces"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/thinking"
@@ -187,19 +186,14 @@ func PassthroughHeadersEnabled(cfg *config.SDKConfig) bool {
 }
 
 func requestExecutionMetadata(ctx context.Context) map[string]any {
-	// Idempotency-Key is an optional client-supplied header used to correlate retries.
-	// It is forwarded as execution metadata; when absent we generate a UUID.
-	key := ""
+	meta := map[string]any{}
 	if ctx != nil {
 		if ginCtx, ok := ctx.Value("gin").(*gin.Context); ok && ginCtx != nil && ginCtx.Request != nil {
-			key = strings.TrimSpace(ginCtx.GetHeader("Idempotency-Key"))
+			if key := strings.TrimSpace(ginCtx.GetHeader("Idempotency-Key")); key != "" {
+				meta[idempotencyKeyMetadataKey] = key
+			}
 		}
 	}
-	if key == "" {
-		key = uuid.NewString()
-	}
-
-	meta := map[string]any{idempotencyKeyMetadataKey: key}
 	if pinnedAuthID := pinnedAuthIDFromContext(ctx); pinnedAuthID != "" {
 		meta[coreexecutor.PinnedAuthMetadataKey] = pinnedAuthID
 	}
@@ -210,6 +204,16 @@ func requestExecutionMetadata(ctx context.Context) map[string]any {
 		meta[coreexecutor.ExecutionSessionMetadataKey] = executionSessionID
 	}
 	return meta
+}
+
+func requestHeadersFromContext(ctx context.Context) http.Header {
+	if ctx == nil {
+		return nil
+	}
+	if ginCtx, ok := ctx.Value("gin").(*gin.Context); ok && ginCtx != nil && ginCtx.Request != nil {
+		return ginCtx.Request.Header.Clone()
+	}
+	return nil
 }
 
 func pinnedAuthIDFromContext(ctx context.Context) string {
@@ -487,6 +491,7 @@ func (h *BaseAPIHandler) ExecuteWithAuthManager(ctx context.Context, handlerType
 	opts := coreexecutor.Options{
 		Stream:          false,
 		Alt:             alt,
+		Headers:         requestHeadersFromContext(ctx),
 		OriginalRequest: rawJSON,
 		SourceFormat:    sdktranslator.FromString(handlerType),
 	}
@@ -534,6 +539,7 @@ func (h *BaseAPIHandler) ExecuteCountWithAuthManager(ctx context.Context, handle
 	opts := coreexecutor.Options{
 		Stream:          false,
 		Alt:             alt,
+		Headers:         requestHeadersFromContext(ctx),
 		OriginalRequest: rawJSON,
 		SourceFormat:    sdktranslator.FromString(handlerType),
 	}
@@ -585,6 +591,7 @@ func (h *BaseAPIHandler) ExecuteStreamWithAuthManager(ctx context.Context, handl
 	opts := coreexecutor.Options{
 		Stream:          true,
 		Alt:             alt,
+		Headers:         requestHeadersFromContext(ctx),
 		OriginalRequest: rawJSON,
 		SourceFormat:    sdktranslator.FromString(handlerType),
 	}

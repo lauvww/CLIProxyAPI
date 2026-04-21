@@ -91,6 +91,9 @@ type Config struct {
 	// Routing controls credential selection behavior.
 	Routing RoutingConfig `yaml:"routing" json:"routing"`
 
+	// ModelCatalog controls whether the embedded model catalog is supplemented by remote refreshes.
+	ModelCatalog ModelCatalogConfig `yaml:"model-catalog,omitempty" json:"model-catalog,omitempty"`
+
 	// WebsocketAuth enables or disables authentication for the WebSocket API.
 	WebsocketAuth bool `yaml:"ws-auth" json:"ws-auth"`
 
@@ -233,6 +236,35 @@ type RoutingConfig struct {
 	// Strategy selects the credential selection strategy.
 	// Supported values: "round-robin" (default), "fill-first".
 	Strategy string `yaml:"strategy,omitempty" json:"strategy,omitempty"`
+
+	// ClaudeCodeSessionAffinity enables session-sticky routing for Claude Code clients.
+	// Deprecated: use SessionAffinity instead for universal session support.
+	ClaudeCodeSessionAffinity bool `yaml:"claude-code-session-affinity,omitempty" json:"claude-code-session-affinity,omitempty"`
+
+	// SessionAffinity enables universal session-sticky routing for all clients.
+	SessionAffinity bool `yaml:"session-affinity,omitempty" json:"session-affinity,omitempty"`
+
+	// SessionAffinityTTL controls how long session-to-auth bindings are retained.
+	SessionAffinityTTL string `yaml:"session-affinity-ttl,omitempty" json:"session-affinity-ttl,omitempty"`
+}
+
+const (
+	// ModelCatalogCLIOverrideLocal means the process was explicitly forced to use embedded models only.
+	ModelCatalogCLIOverrideLocal = "--local-model"
+	// ModelCatalogCLIOverrideRemote means the process was explicitly forced to enable remote model refresh.
+	ModelCatalogCLIOverrideRemote = "--remote-model"
+)
+
+// ModelCatalogConfig controls runtime model catalog behavior.
+type ModelCatalogConfig struct {
+	// RemoteRefreshEnabled opts into periodic remote model catalog refreshes.
+	RemoteRefreshEnabled bool `yaml:"remote-refresh-enabled,omitempty" json:"remote-refresh-enabled,omitempty"`
+
+	// RemoteRefreshEffective reflects the effective runtime state after CLI overrides are applied.
+	RemoteRefreshEffective bool `yaml:"-" json:"remote-refresh-effective,omitempty"`
+
+	// RemoteRefreshForcedByCLI indicates the CLI flag currently overriding config-driven behavior.
+	RemoteRefreshForcedByCLI string `yaml:"-" json:"remote-refresh-forced-by-cli,omitempty"`
 }
 
 // OAuthModelAlias defines a model ID alias for a specific channel.
@@ -617,6 +649,8 @@ func LoadConfigOptional(configFile string, optional bool) (*Config, error) {
 		return nil, fmt.Errorf("failed to parse config file: %w", err)
 	}
 	cfg.NormalizeAuthPool()
+	cfg.NormalizeRouting()
+	cfg.NormalizeModelCatalog()
 	cfg.NormalizeAPIKeyAliases()
 
 	// NOTE: Startup legacy key migration is intentionally disabled.
@@ -806,6 +840,74 @@ func (cfg *Config) NormalizeAuthPool() {
 	cfg.ApplyCurrentAuthPoolRoutingStrategy()
 }
 
+// NormalizeRouting trims routing config values and keeps strategy within supported values.
+func (cfg *Config) NormalizeRouting() {
+	if cfg == nil {
+		return
+	}
+
+	cfg.Routing.Strategy = normalizeRoutingStrategyValue(cfg.Routing.Strategy)
+	cfg.Routing.SessionAffinityTTL = strings.TrimSpace(cfg.Routing.SessionAffinityTTL)
+}
+
+// NormalizeModelCatalog trims runtime-only model catalog metadata.
+func (cfg *Config) NormalizeModelCatalog() {
+	if cfg == nil {
+		return
+	}
+
+	cfg.ModelCatalog.RemoteRefreshForcedByCLI = normalizeModelCatalogCLIOverride(
+		cfg.ModelCatalog.RemoteRefreshForcedByCLI,
+	)
+}
+
+// ApplyModelCatalogRuntimeState updates runtime-only model catalog metadata after CLI overrides are applied.
+func (cfg *Config) ApplyModelCatalogRuntimeState(forcedByCLI string) bool {
+	if cfg == nil {
+		return false
+	}
+
+	forcedByCLI = normalizeModelCatalogCLIOverride(forcedByCLI)
+	effective := ResolveModelCatalogRemoteRefreshEnabled(cfg, forcedByCLI)
+	cfg.ModelCatalog.RemoteRefreshEffective = effective
+	cfg.ModelCatalog.RemoteRefreshForcedByCLI = forcedByCLI
+	return effective
+}
+
+// ResolveModelCatalogRemoteRefreshEnabled returns the effective remote-refresh state after CLI overrides.
+func ResolveModelCatalogRemoteRefreshEnabled(cfg *Config, forcedByCLI string) bool {
+	switch normalizeModelCatalogCLIOverride(forcedByCLI) {
+	case ModelCatalogCLIOverrideRemote:
+		return true
+	case ModelCatalogCLIOverrideLocal:
+		return false
+	}
+	if cfg == nil {
+		return false
+	}
+	return cfg.ModelCatalog.RemoteRefreshEnabled
+}
+
+func normalizeModelCatalogCLIOverride(forcedByCLI string) string {
+	switch strings.TrimSpace(forcedByCLI) {
+	case ModelCatalogCLIOverrideRemote:
+		return ModelCatalogCLIOverrideRemote
+	case ModelCatalogCLIOverrideLocal:
+		return ModelCatalogCLIOverrideLocal
+	default:
+		return ""
+	}
+}
+
+func normalizeRoutingStrategyValue(strategy string) string {
+	switch strings.ToLower(strings.TrimSpace(strategy)) {
+	case "fill-first", "fillfirst", "ff":
+		return "fill-first"
+	default:
+		return "round-robin"
+	}
+}
+
 // SyncAuthPoolFromAuthDir aligns auth-pool active path with AuthDir.
 func (cfg *Config) SyncAuthPoolFromAuthDir() {
 	if cfg == nil {
@@ -972,8 +1074,9 @@ func defaultAuthPoolRoutingStrategy(strategy string) string {
 	return normalized
 }
 
-// NormalizeAPIKeyAliases trims configured aliases and drops entries that do not
-// map to an existing configured client API key.
+// NormalizeAPIKeyAliases trims configured aliases and keeps all non-empty
+// source -> alias mappings so historical usage buckets and provider fallback
+// buckets can also be remapped at read time.
 func (cfg *Config) NormalizeAPIKeyAliases() {
 	if cfg == nil {
 		return
@@ -984,28 +1087,11 @@ func (cfg *Config) NormalizeAPIKeyAliases() {
 		return
 	}
 
-	validKeys := make(map[string]struct{}, len(cfg.APIKeys))
-	for _, key := range cfg.APIKeys {
-		trimmedKey := strings.TrimSpace(key)
-		if trimmedKey == "" {
-			continue
-		}
-		validKeys[trimmedKey] = struct{}{}
-	}
-
-	if len(validKeys) == 0 {
-		cfg.APIKeyAliases = nil
-		return
-	}
-
 	normalized := make(map[string]string, len(cfg.APIKeyAliases))
 	for rawKey, rawAlias := range cfg.APIKeyAliases {
 		key := strings.TrimSpace(rawKey)
 		alias := strings.TrimSpace(rawAlias)
 		if key == "" || alias == "" {
-			continue
-		}
-		if _, ok := validKeys[key]; !ok {
 			continue
 		}
 		normalized[key] = alias
@@ -1641,6 +1727,8 @@ func isKnownDefaultValue(path []string, node *yaml.Node) bool {
 			return node.Value == DefaultPanelGitHubRepository
 		case "routing.strategy":
 			return node.Value == "round-robin"
+		case "routing.session-affinity-ttl":
+			return node.Value == "1h"
 		}
 	}
 

@@ -63,6 +63,7 @@ func (h *Handler) persistAuthPoolState(c *gin.Context) bool {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save config", "message": err.Error()})
 		return false
 	}
+	h.applyConfigUpdate()
 	h.respondWithAuthPoolState(c)
 	return true
 }

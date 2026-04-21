@@ -73,10 +73,10 @@ type claudeSignatureTree struct {
 	HasField7           bool
 }
 
-// StripInvalidSignatureThinkingBlocks removes thinking blocks whose signatures
-// are empty or not valid Claude format (must start with 'E' or 'R' after
-// stripping any cache prefix). These come from proxy-generated responses
-// (Antigravity/Gemini) where no real Claude signature exists.
+// StripEmptySignatureThinkingBlocks removes only thinking blocks whose
+// signatures are empty. These typically come from proxy-generated responses
+// where no real Claude signature exists yet. Non-empty but malformed
+// signatures must be preserved so strict bypass validation can reject them.
 func StripEmptySignatureThinkingBlocks(payload []byte) []byte {
 	messages := gjson.GetBytes(payload, "messages")
 	if !messages.IsArray() {
@@ -91,7 +91,7 @@ func StripEmptySignatureThinkingBlocks(payload []byte) []byte {
 		var kept []string
 		stripped := false
 		for _, part := range content.Array() {
-			if part.Get("type").String() == "thinking" && !hasValidClaudeSignature(part.Get("signature").String()) {
+			if part.Get("type").String() == "thinking" && strings.TrimSpace(part.Get("signature").String()) == "" {
 				stripped = true
 				continue
 			}
@@ -110,23 +110,6 @@ func StripEmptySignatureThinkingBlocks(payload []byte) []byte {
 		return payload
 	}
 	return payload
-}
-
-// hasValidClaudeSignature returns true if sig looks like a real Claude thinking
-// signature: non-empty and starts with 'E' or 'R' (after stripping optional
-// cache prefix like "modelGroup#").
-func hasValidClaudeSignature(sig string) bool {
-	sig = strings.TrimSpace(sig)
-	if sig == "" {
-		return false
-	}
-	if idx := strings.IndexByte(sig, '#'); idx >= 0 {
-		sig = strings.TrimSpace(sig[idx+1:])
-	}
-	if sig == "" {
-		return false
-	}
-	return sig[0] == 'E' || sig[0] == 'R'
 }
 
 func ValidateClaudeBypassSignatures(inputRawJSON []byte) error {

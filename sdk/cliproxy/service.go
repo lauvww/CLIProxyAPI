@@ -93,6 +93,36 @@ type Service struct {
 	wsGateway *wsrelay.Manager
 }
 
+func modelCatalogCLIOverrideFromConfig(cfg *config.Config) string {
+	if cfg == nil {
+		return ""
+	}
+	return strings.TrimSpace(cfg.ModelCatalog.RemoteRefreshForcedByCLI)
+}
+
+func applyModelCatalogRuntimeConfig(
+	ctx context.Context,
+	previousCfg *config.Config,
+	nextCfg *config.Config,
+) bool {
+	forcedByCLI := modelCatalogCLIOverrideFromConfig(previousCfg)
+	previousRemoteRefreshEnabled := config.ResolveModelCatalogRemoteRefreshEnabled(
+		previousCfg,
+		forcedByCLI,
+	)
+
+	nextRemoteRefreshEnabled := false
+	if nextCfg != nil {
+		nextRemoteRefreshEnabled = nextCfg.ApplyModelCatalogRuntimeState(forcedByCLI)
+	}
+
+	if previousRemoteRefreshEnabled != nextRemoteRefreshEnabled {
+		registry.SetModelsUpdaterEnabled(ctx, nextRemoteRefreshEnabled)
+	}
+
+	return nextRemoteRefreshEnabled
+}
+
 // RegisterUsagePlugin registers a usage plugin on the global usage manager.
 // This allows external code to monitor API usage and token consumption.
 //
@@ -333,9 +363,15 @@ func (s *Service) applyCoreAuthRemoval(ctx context.Context, id string) {
 		if strings.EqualFold(strings.TrimSpace(existing.Provider), "codex") {
 			executor.CloseCodexWebsocketSessionsForAuthID(existing.ID, "auth_removed")
 		}
+		existing.Disabled = true
+		existing.Unavailable = false
+		existing.Status = coreauth.StatusDisabled
+		existing.UpdatedAt = time.Now().UTC()
+		if _, errUpdate := s.coreManager.Update(ctx, existing); errUpdate != nil {
+			log.Errorf("failed to tombstone auth %s: %v", id, errUpdate)
+		}
 	}
 	GlobalModelRegistry().UnregisterClient(id)
-	s.coreManager.Forget(id)
 }
 
 func (s *Service) applyRetryConfig(cfg *config.Config) {
@@ -494,6 +530,14 @@ func (s *Service) Run(ctx context.Context) error {
 		return err
 	}
 
+	initialRemoteModelRefreshEnabled := false
+	if s.cfg != nil {
+		initialRemoteModelRefreshEnabled = s.cfg.ApplyModelCatalogRuntimeState(
+			modelCatalogCLIOverrideFromConfig(s.cfg),
+		)
+	}
+	registry.SetModelsUpdaterEnabled(ctx, initialRemoteModelRefreshEnabled)
+
 	s.applyRetryConfig(s.cfg)
 
 	if s.coreManager != nil {
@@ -520,8 +564,55 @@ func (s *Service) Run(ctx context.Context) error {
 
 	// legacy clients removed; no caches to refresh
 
+	var watcherWrapper *WatcherWrapper
+	applyRuntimeConfig := func(newCfg *config.Config) {
+		previousSelectorConfig := resolvedRoutingSelectorConfig{}
+		var previousCfg *config.Config
+		s.cfgMu.RLock()
+		if s.cfg != nil {
+			previousCfg = s.cfg
+			previousSelectorConfig = resolveRoutingSelectorConfig(s.cfg)
+		}
+		s.cfgMu.RUnlock()
+
+		if newCfg == nil {
+			newCfg = previousCfg
+		}
+		if newCfg == nil {
+			return
+		}
+
+		applyModelCatalogRuntimeConfig(ctx, previousCfg, newCfg)
+		nextSelectorConfig := resolveRoutingSelectorConfig(newCfg)
+		if s.coreManager != nil && previousSelectorConfig != nextSelectorConfig {
+			s.coreManager.SetSelector(buildRoutingSelector(newCfg))
+		}
+
+		if watcherWrapper != nil {
+			watcherWrapper.ApplyConfig(newCfg)
+		}
+
+		s.applyRetryConfig(newCfg)
+		s.applyPprofConfig(newCfg)
+		internalusage.SetAPIKeyAliases(newCfg.APIKeyAliases)
+		if s.server != nil {
+			s.server.UpdateClients(newCfg)
+		}
+		s.cfgMu.Lock()
+		s.cfg = newCfg
+		s.cfgMu.Unlock()
+		if s.coreManager != nil {
+			s.coreManager.SetConfig(newCfg)
+			s.coreManager.SetOAuthModelAlias(newCfg.OAuthModelAlias)
+		}
+		s.rebindExecutors()
+	}
+
+	serverOptions := append([]api.ServerOption(nil), s.serverOptions...)
+	serverOptions = append(serverOptions, api.WithConfigApplyHook(applyRuntimeConfig))
+
 	// handlers no longer depend on legacy clients; pass nil slice initially
-	s.server = api.NewServer(s.cfg, s.coreManager, s.accessManager, s.configPath, s.serverOptions...)
+	s.server = api.NewServer(s.cfg, s.coreManager, s.accessManager, s.configPath, serverOptions...)
 
 	if s.authManager == nil {
 		s.authManager = newDefaultAuthManager()
@@ -608,60 +699,8 @@ func (s *Service) Run(ctx context.Context) error {
 		s.hooks.OnAfterStart(s)
 	}
 
-	var watcherWrapper *WatcherWrapper
 	reloadCallback := func(newCfg *config.Config) {
-		previousStrategy := ""
-		s.cfgMu.RLock()
-		if s.cfg != nil {
-			previousStrategy = strings.ToLower(strings.TrimSpace(s.cfg.Routing.Strategy))
-		}
-		s.cfgMu.RUnlock()
-
-		if newCfg == nil {
-			s.cfgMu.RLock()
-			newCfg = s.cfg
-			s.cfgMu.RUnlock()
-		}
-		if newCfg == nil {
-			return
-		}
-
-		nextStrategy := strings.ToLower(strings.TrimSpace(newCfg.Routing.Strategy))
-		normalizeStrategy := func(strategy string) string {
-			switch strategy {
-			case "fill-first", "fillfirst", "ff":
-				return "fill-first"
-			default:
-				return "round-robin"
-			}
-		}
-		previousStrategy = normalizeStrategy(previousStrategy)
-		nextStrategy = normalizeStrategy(nextStrategy)
-		if s.coreManager != nil && previousStrategy != nextStrategy {
-			var selector coreauth.Selector
-			switch nextStrategy {
-			case "fill-first":
-				selector = &coreauth.FillFirstSelector{}
-			default:
-				selector = &coreauth.RoundRobinSelector{}
-			}
-			s.coreManager.SetSelector(selector)
-		}
-
-		s.applyRetryConfig(newCfg)
-		s.applyPprofConfig(newCfg)
-		internalusage.SetAPIKeyAliases(newCfg.APIKeyAliases)
-		if s.server != nil {
-			s.server.UpdateClients(newCfg)
-		}
-		s.cfgMu.Lock()
-		s.cfg = newCfg
-		s.cfgMu.Unlock()
-		if s.coreManager != nil {
-			s.coreManager.SetConfig(newCfg)
-			s.coreManager.SetOAuthModelAlias(newCfg.OAuthModelAlias)
-		}
-		s.rebindExecutors()
+		applyRuntimeConfig(newCfg)
 	}
 
 	watcherWrapper, err = s.watcherFactory(s.configPath, s.cfg.AuthDir, reloadCallback)
@@ -722,6 +761,7 @@ func (s *Service) Shutdown(ctx context.Context) error {
 		if s.watcherCancel != nil {
 			s.watcherCancel()
 		}
+		registry.StopModelsUpdater()
 		if s.coreManager != nil {
 			s.coreManager.StopAutoRefresh()
 		}
@@ -789,23 +829,66 @@ func (s *Service) restorePersistedUsage(now time.Time) {
 		return
 	}
 
-	currentAuthPool := cfg.CurrentAuthPoolPath()
-	snapshot, path, found, errLoad := internalusage.LoadRecentSnapshot(configPath, currentAuthPool, now, usagePersistenceWindowDays)
-	if errLoad != nil {
-		log.Warnf("failed to load persisted usage statistics: %v", errLoad)
-		return
+	poolsToRestore := make([]string, 0, len(cfg.AuthPool.Paths)+1)
+	seenPools := make(map[string]struct{}, len(cfg.AuthPool.Paths)+1)
+	appendPool := func(pool string) {
+		pool = strings.TrimSpace(pool)
+		if _, ok := seenPools[pool]; ok {
+			return
+		}
+		seenPools[pool] = struct{}{}
+		poolsToRestore = append(poolsToRestore, pool)
 	}
-	if !found {
+
+	appendPool(cfg.CurrentAuthPoolPath())
+	for _, authPool := range cfg.AuthPool.Paths {
+		appendPool(authPool)
+	}
+	if len(poolsToRestore) == 0 {
+		appendPool("")
+	}
+
+	loadedSnapshots := 0
+	var totalAdded int64
+	var totalSkipped int64
+	for _, authPool := range poolsToRestore {
+		snapshot, path, found, errLoad := internalusage.LoadRecentSnapshot(
+			configPath,
+			authPool,
+			now,
+			usagePersistenceWindowDays,
+		)
+		if errLoad != nil {
+			log.Warnf("failed to load persisted usage statistics for pool %q: %v", authPool, errLoad)
+			continue
+		}
+		if !found {
+			continue
+		}
+
+		result := stats.MergeSnapshot(snapshot)
+		loadedSnapshots++
+		totalAdded += result.Added
+		totalSkipped += result.Skipped
+		log.Infof(
+			"loaded persisted usage statistics from %s (pool=%q added=%d skipped=%d window=%d days)",
+			path,
+			strings.TrimSpace(authPool),
+			result.Added,
+			result.Skipped,
+			usagePersistenceWindowDays,
+		)
+	}
+
+	if loadedSnapshots == 0 {
 		return
 	}
 
-	result := stats.MergeSnapshot(snapshot)
 	log.Infof(
-		"loaded persisted usage statistics from %s (pool=%q added=%d skipped=%d window=%d days)",
-		path,
-		strings.TrimSpace(currentAuthPool),
-		result.Added,
-		result.Skipped,
+		"restored persisted usage statistics from %d pool snapshot(s) (added=%d skipped=%d window=%d days)",
+		loadedSnapshots,
+		totalAdded,
+		totalSkipped,
 		usagePersistenceWindowDays,
 	)
 }

@@ -67,10 +67,11 @@ func (h *Handler) GetUsageStatistics(c *gin.Context) {
 		snapshot = usage.FilterSnapshotByPool(snapshot, poolFilter)
 		poolFilterApplied = true
 	}
+	displaySnapshot := usage.ApplyAPIKeyAliasesToSnapshot(snapshot)
 
 	response := gin.H{
-		"usage":                      snapshot,
-		"failed_requests":            snapshot.FailureCount,
+		"usage":                      displaySnapshot,
+		"failed_requests":            displaySnapshot.FailureCount,
 		"pool_filter":                poolFilter,
 		"pool_filter_applied":        poolFilterApplied,
 		"auth_pool_filter":           authPoolFilter,
@@ -93,7 +94,12 @@ func (h *Handler) GetUsageStatistics(c *gin.Context) {
 		response["usage_scope_hint"] = "Showing usage for all auth pools."
 	}
 	if includeByPool {
-		response["by_pool"] = usage.AggregateSnapshotByPool(fullSnapshot)
+		aggregated := usage.AggregateSnapshotByPool(fullSnapshot)
+		displayAggregated := make(map[string]usage.StatisticsSnapshot, len(aggregated))
+		for poolName, poolSnapshot := range aggregated {
+			displayAggregated[poolName] = usage.ApplyAPIKeyAliasesToSnapshot(poolSnapshot)
+		}
+		response["by_pool"] = displayAggregated
 	}
 
 	c.JSON(http.StatusOK, response)

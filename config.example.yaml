@@ -118,6 +118,18 @@ quota-exceeded:
 # Routing strategy for selecting credentials when multiple match.
 routing:
   strategy: "round-robin" # round-robin (default), fill-first
+  # Enable universal session-sticky routing for repeated requests from the same session.
+  # Session IDs are extracted from metadata.user_id, X-Session-ID, conversation_id,
+  # or a stable message-content hash fallback when explicit IDs are absent.
+  session-affinity: false # default: false
+  # How long a session-to-auth binding is retained before it can be reselected.
+  session-affinity-ttl: "1h"
+
+# Model catalog refresh policy.
+# When false (default), use the embedded model catalog only unless the process is started with --remote-model.
+# When true, CPA periodically refreshes the catalog from the remote source unless the process is started with --local-model.
+model-catalog:
+  remote-refresh-enabled: false
 
 # When true, enable authentication for the WebSocket API (/v1/ws).
 ws-auth: false

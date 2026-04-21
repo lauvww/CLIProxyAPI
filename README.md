@@ -55,6 +55,7 @@ Get 10% OFF GLM CODING PLAN：https://z.ai/subscribe?ic=8JVLJQFSKB
 - Streaming and non-streaming responses
 - Function calling/tools support
 - Multimodal input support (text and images)
+- Codex image-generation response translation for OpenAI chat-completions and Gemini-compatible clients
 - Multiple accounts with round-robin load balancing (Gemini, OpenAI, Claude and iFlow)
 - Simple CLI authentication flows (Gemini, OpenAI, Claude and iFlow)
 - Generative Language API Key support
@@ -71,6 +72,9 @@ Get 10% OFF GLM CODING PLAN：https://z.ai/subscribe?ic=8JVLJQFSKB
 - **Auth pool mode** now supports managing multiple credential directories while keeping runtime behavior stable: only one `active-path` participates in live routing at a time.
 - Switching the current auth pool hot-applies the new `auth-dir`, restores that pool's own routing strategy, and moves the file watcher to the new directory without restarting the service.
 - Management usage statistics and auth-file operations now scope to the current auth pool by default when auth-pool mode is enabled. You can still explicitly view all pools in the management UI.
+- Session-sticky routing is now part of the runtime selector stack: `routing.session-affinity` and `routing.session-affinity-ttl` can be changed through config and hot-applied without restarting the service.
+- Management key-retrieval endpoints now expose stable `auth-index` metadata so the management panel can map live runtime auths back to config entries more reliably.
+- Codex image-generation responses are now translated for OpenAI chat-completions and Gemini-compatible clients, so image payloads are consumable instead of being raw upstream events.
 - Recent usage persistence is stored per auth pool. On Windows desktop deployments the packaged build writes pool snapshots under `D:\CLIProxyAPI\use` and restores the most recent 7 days for the current pool on startup.
 - Windows tray mode keeps the service in the notification area, persists usage before restart/exit, opens the management panel from the tray, and detaches the console during tray launch so the packaged desktop startup path no longer relies on a visible taskbar console window.
 
@@ -81,6 +85,16 @@ CLIProxyAPI Guides: [https://help.router-for.me/](https://help.router-for.me/)
 ## Versioning
 
 See [VERSIONING.md](VERSIONING.md) for the fork's version source of truth, update-check behavior, and local build workflow.
+
+This repository now ships on the coordinated `2.x` line. Backend and management UI releases are expected to move together unless a release note explicitly says otherwise.
+
+Local binaries built with `scripts/build-local.ps1` default to the embedded model catalog for stable desktop behavior.
+
+- `model-catalog.remote-refresh-enabled` controls whether the running service should keep refreshing models from remote sources.
+- The management panel can toggle that setting at runtime without restarting CPA.
+- `--remote-model` still force-enables remote refresh for the current process.
+- `--local-model` still force-disables remote refresh for the current process.
+- CLI flags take precedence over config file changes until the process is restarted without the override.
 
 ## Management API
 

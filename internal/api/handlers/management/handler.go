@@ -18,6 +18,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/usage"
 	sdkAuth "github.com/router-for-me/CLIProxyAPI/v6/sdk/auth"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
+	log "github.com/sirupsen/logrus"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -48,6 +49,7 @@ type Handler struct {
 	envSecret           string
 	logDir              string
 	postAuthHook        coreauth.PostAuthHook
+	configApplyHook     func(*config.Config)
 }
 
 // NewHandler creates a new management handler instance.
@@ -132,6 +134,12 @@ func (h *Handler) SetLogDirectory(dir string) {
 // SetPostAuthHook registers a hook to be called after auth record creation but before persistence.
 func (h *Handler) SetPostAuthHook(hook coreauth.PostAuthHook) {
 	h.postAuthHook = hook
+}
+
+// SetConfigApplyHook registers a hook to be called after config persistence so
+// runtime state can be refreshed immediately without waiting for the file watcher.
+func (h *Handler) SetConfigApplyHook(hook func(*config.Config)) {
+	h.configApplyHook = hook
 }
 
 // Middleware enforces access control for management endpoints.
@@ -279,12 +287,27 @@ func (h *Handler) saveConfig() error {
 	return config.SaveConfigPreserveComments(h.configFilePath, h.cfg)
 }
 
+func (h *Handler) applyConfigUpdate() {
+	if h == nil || h.configApplyHook == nil || h.cfg == nil {
+		return
+	}
+
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			log.Warnf("management config apply hook panicked: %v", recovered)
+		}
+	}()
+
+	h.configApplyHook(h.cfg)
+}
+
 // persist saves the current in-memory config to disk.
 func (h *Handler) persist(c *gin.Context) bool {
 	if err := h.saveConfig(); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to save config: %v", err)})
 		return false
 	}
+	h.applyConfigUpdate()
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	return true
 }

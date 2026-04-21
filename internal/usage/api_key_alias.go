@@ -44,3 +44,54 @@ func lookupAPIKeyAlias(apiKey string) string {
 
 	return strings.TrimSpace(aliases[apiKey])
 }
+
+func displayAPIBucketName(apiName string) string {
+	apiName = strings.TrimSpace(apiName)
+	if apiName == "" {
+		return ""
+	}
+
+	if alias := lookupAPIKeyAlias(apiName); alias != "" {
+		return alias
+	}
+
+	return apiName
+}
+
+// ApplyAPIKeyAliasesToSnapshot remaps API buckets using the current alias
+// table at read time so alias edits immediately reflect in usage statistics.
+func ApplyAPIKeyAliasesToSnapshot(snapshot StatisticsSnapshot) StatisticsSnapshot {
+	if len(snapshot.APIs) == 0 {
+		return snapshot
+	}
+
+	result := snapshot
+	result.APIs = make(map[string]APISnapshot, len(snapshot.APIs))
+	for apiName, apiSnapshot := range snapshot.APIs {
+		mappedName := displayAPIBucketName(apiName)
+		if mappedName == "" {
+			mappedName = apiName
+		}
+
+		existing := result.APIs[mappedName]
+		if existing.Models == nil {
+			existing.Models = make(map[string]ModelSnapshot, len(apiSnapshot.Models))
+		}
+		existing.TotalRequests += apiSnapshot.TotalRequests
+		existing.TotalTokens += apiSnapshot.TotalTokens
+
+		for modelName, modelSnapshot := range apiSnapshot.Models {
+			existingModel := existing.Models[modelName]
+			existingModel.TotalRequests += modelSnapshot.TotalRequests
+			existingModel.TotalTokens += modelSnapshot.TotalTokens
+			if len(modelSnapshot.Details) > 0 {
+				existingModel.Details = append(existingModel.Details, modelSnapshot.Details...)
+			}
+			existing.Models[modelName] = existingModel
+		}
+
+		result.APIs[mappedName] = existing
+	}
+
+	return result
+}

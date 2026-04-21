@@ -138,6 +138,23 @@ func (w *Watcher) SetConfig(cfg *config.Config) {
 	w.oldConfigYaml, _ = yaml.Marshal(cfg)
 }
 
+// ApplyConfig updates the watcher config cache and switches the watched auth
+// directory immediately when auth-dir changes at runtime.
+func (w *Watcher) ApplyConfig(cfg *config.Config) {
+	if w == nil || cfg == nil {
+		return
+	}
+
+	w.SetConfig(cfg)
+
+	nextAuthDir := strings.TrimSpace(cfg.AuthDir)
+	if nextAuthDir == "" {
+		return
+	}
+
+	w.switchAuthDir(nextAuthDir)
+}
+
 func (w *Watcher) switchAuthDir(nextAuthDir string) {
 	if w == nil {
 		return

@@ -24,7 +24,6 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/managementasset"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/misc"
-	"github.com/router-for-me/CLIProxyAPI/v6/internal/registry"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/store"
 	_ "github.com/router-for-me/CLIProxyAPI/v6/internal/translator"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/tui"
@@ -36,11 +35,42 @@ import (
 )
 
 var (
-	Version           = "1.1.1"
+	Version           = "2.0.0"
 	Commit            = "none"
 	BuildDate         = "local-build"
+	DefaultLocalModel = "false"
 	DefaultConfigPath = ""
 )
+
+func defaultLocalModelEnabled() bool {
+	return strings.EqualFold(strings.TrimSpace(DefaultLocalModel), "true")
+}
+
+func modelCatalogCLIOverrideFromFlags(flags *flag.FlagSet, localModel, remoteModel bool) string {
+	if flags == nil {
+		return ""
+	}
+
+	localExplicit := false
+	remoteExplicit := false
+	flags.Visit(func(f *flag.Flag) {
+		switch f.Name {
+		case "local-model":
+			localExplicit = true
+		case "remote-model":
+			remoteExplicit = true
+		}
+	})
+
+	switch {
+	case remoteExplicit && remoteModel:
+		return config.ModelCatalogCLIOverrideRemote
+	case localExplicit && localModel:
+		return config.ModelCatalogCLIOverrideLocal
+	default:
+		return ""
+	}
+}
 
 // init initializes the shared logger setup.
 func init() {
@@ -93,6 +123,7 @@ func main() {
 	var tuiMode bool
 	var standalone bool
 	var localModel bool
+	var remoteModel bool
 	var trayMode bool
 	var trayOpenManagement bool
 
@@ -114,7 +145,8 @@ func main() {
 	flag.StringVar(&password, "password", "", "")
 	flag.BoolVar(&tuiMode, "tui", false, "Start with terminal management UI")
 	flag.BoolVar(&standalone, "standalone", false, "In TUI mode, start an embedded local server")
-	flag.BoolVar(&localModel, "local-model", false, "Use embedded model catalog only, skip remote model fetching")
+	flag.BoolVar(&localModel, "local-model", defaultLocalModelEnabled(), "Use embedded model catalog only, skip remote model fetching")
+	flag.BoolVar(&remoteModel, "remote-model", false, "Force remote model fetching even when the binary defaults to the embedded model catalog")
 	flag.BoolVar(&trayMode, "tray", false, "Run with Windows tray management (start and monitor service)")
 	flag.BoolVar(&trayOpenManagement, "tray-open-management", false, "Open management page automatically on tray startup (with -tray)")
 
@@ -150,6 +182,9 @@ func main() {
 	if autoTrayLaunch {
 		trayMode = true
 		trayOpenManagement = true
+	}
+	if remoteModel {
+		localModel = false
 	}
 	if shouldHideTrayConsole(trayMode, autoTrayLaunch) {
 		detachConsoleWindow()
@@ -429,6 +464,8 @@ func main() {
 	if cfg == nil {
 		cfg = &config.Config{}
 	}
+	modelCatalogCLIOverride := modelCatalogCLIOverrideFromFlags(flag.CommandLine, localModel, remoteModel)
+	remoteModelRefreshEnabled := cfg.ApplyModelCatalogRuntimeState(modelCatalogCLIOverride)
 	syncLoggingToFileState(cfg, configFilePath, trayMode)
 
 	// In cloud deploy mode, check if we have a valid configuration
@@ -527,7 +564,7 @@ func main() {
 			cmd.WaitForCloudDeploy()
 			return
 		}
-		if localModel && (!tuiMode || standalone) {
+		if !remoteModelRefreshEnabled && (!tuiMode || standalone) {
 			log.Info("Local model mode: using embedded model catalog, remote model updates disabled")
 		}
 		if trayMode && tuiMode {
@@ -539,9 +576,6 @@ func main() {
 				// Standalone mode: start an embedded local server and connect TUI client to it.
 				managementasset.StartAutoUpdater(context.Background(), configFilePath)
 				misc.StartAntigravityVersionUpdater(context.Background())
-				if !localModel {
-					registry.StartModelsUpdater(context.Background())
-				}
 				hook := tui.NewLogHook(2000)
 				hook.SetFormatter(&logging.LogFormatter{})
 				log.AddHook(hook)
@@ -615,9 +649,6 @@ func main() {
 			// Start the main proxy service
 			managementasset.StartAutoUpdater(context.Background(), configFilePath)
 			misc.StartAntigravityVersionUpdater(context.Background())
-			if !localModel {
-				registry.StartModelsUpdater(context.Background())
-			}
 			if trayMode {
 				if errTray := runTrayMode(cfg, configFilePath, password, trayOpenManagement); errTray != nil {
 					log.Errorf("failed to run tray mode: %v", errTray)

@@ -13,6 +13,7 @@ type Config = internalconfig.Config
 type StreamingConfig = internalconfig.StreamingConfig
 type TLSConfig = internalconfig.TLSConfig
 type RemoteManagement = internalconfig.RemoteManagement
+type ModelCatalogConfig = internalconfig.ModelCatalogConfig
 type AmpCode = internalconfig.AmpCode
 type OAuthModelAlias = internalconfig.OAuthModelAlias
 type PayloadConfig = internalconfig.PayloadConfig
@@ -51,4 +52,8 @@ func SaveConfigPreserveCommentsUpdateNestedScalar(configFile string, path []stri
 
 func NormalizeCommentIndentation(data []byte) []byte {
 	return internalconfig.NormalizeCommentIndentation(data)
+}
+
+func ResolveModelCatalogRemoteRefreshEnabled(cfg *Config, forcedByCLI string) bool {
+	return internalconfig.ResolveModelCatalogRemoteRefreshEnabled(cfg, forcedByCLI)
 }
