@@ -192,6 +192,18 @@ func requestExecutionMetadata(ctx context.Context) map[string]any {
 			if key := strings.TrimSpace(ginCtx.GetHeader("Idempotency-Key")); key != "" {
 				meta[idempotencyKeyMetadataKey] = key
 			}
+			if rawAPIKey, exists := ginCtx.Get("apiKey"); exists {
+				switch value := rawAPIKey.(type) {
+				case string:
+					if trimmed := strings.TrimSpace(value); trimmed != "" {
+						meta[coreexecutor.ClientAPIKeyMetadataKey] = trimmed
+					}
+				case fmt.Stringer:
+					if trimmed := strings.TrimSpace(value.String()); trimmed != "" {
+						meta[coreexecutor.ClientAPIKeyMetadataKey] = trimmed
+					}
+				}
+			}
 		}
 	}
 	if pinnedAuthID := pinnedAuthIDFromContext(ctx); pinnedAuthID != "" {

@@ -359,7 +359,19 @@ func (h *Handler) respondAuthFilesForScope(c *gin.Context, files []gin.H, viewed
 		"current_auth_pool": currentAuthPool,
 		"viewed_auth_pool":  viewedAuthPool,
 		"auth_pool_enabled": h != nil && h.cfg != nil && h.cfg.AuthPool.Enabled,
-		"readonly":          viewedAuthPool != "" && !pathutil.PathsEqual(viewedAuthPool, currentAuthPool),
+		"auth_pool_mode": func() string {
+			if h == nil || h.cfg == nil {
+				return "single"
+			}
+			return h.cfg.AuthPoolModeValue()
+		}(),
+		"fallback_active_path": func() string {
+			if h == nil || h.cfg == nil {
+				return ""
+			}
+			return strings.TrimSpace(h.cfg.CurrentAuthPoolPath())
+		}(),
+		"readonly": viewedAuthPool != "" && !pathutil.PathsEqual(viewedAuthPool, currentAuthPool),
 	})
 }
 
@@ -390,6 +402,10 @@ func (h *Handler) collectAuthFileEntriesFromManager(scopePath string) []gin.H {
 func (h *Handler) ListAuthFiles(c *gin.Context) {
 	if h == nil {
 		c.JSON(500, gin.H{"error": "handler not initialized"})
+		return
+	}
+	if strings.TrimSpace(c.Query("path")) != "" {
+		h.GetAuthPoolFiles(c)
 		return
 	}
 	currentAuthPool := strings.TrimSpace(h.currentAuthPoolScope())

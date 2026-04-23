@@ -63,6 +63,9 @@ func LoadRecentSnapshot(configPath string, authPool string, now time.Time, dayWi
 	if payload.Version != 0 && payload.Version != usagePersistencePayloadVer {
 		return StatisticsSnapshot{}, path, false, fmt.Errorf("unsupported usage persistence version: %d", payload.Version)
 	}
+	if canonicalized, changed := CanonicalizeAPIUsageSnapshot(payload.Usage); changed {
+		payload.Usage = canonicalized
+	}
 
 	if now.IsZero() {
 		now = time.Now().UTC()
@@ -80,6 +83,9 @@ func SaveSnapshot(configPath string, authPool string, snapshot StatisticsSnapsho
 	path := ResolvePersistenceFilePath(configPath, authPool)
 	if exportedAt.IsZero() {
 		exportedAt = time.Now().UTC()
+	}
+	if canonicalized, changed := CanonicalizeAPIUsageSnapshot(snapshot); changed {
+		snapshot = canonicalized
 	}
 
 	filtered := snapshot

@@ -4,6 +4,7 @@ package watcher
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -11,6 +12,8 @@ import (
 
 	"github.com/fsnotify/fsnotify"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/pathutil"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/watcher/diff"
 	"gopkg.in/yaml.v3"
 
 	sdkAuth "github.com/router-for-me/CLIProxyAPI/v6/sdk/auth"
@@ -32,6 +35,7 @@ type authDirProvider interface {
 type Watcher struct {
 	configPath        string
 	authDir           string
+	authDirs          []string
 	config            *config.Config
 	clientsMutex      sync.RWMutex
 	configReloadMu    sync.Mutex
@@ -95,6 +99,7 @@ func NewWatcher(configPath, authDir string, reloadCallback func(*config.Config))
 	w := &Watcher{
 		configPath:      configPath,
 		authDir:         authDir,
+		authDirs:        uniqueAuthDirs([]string{authDir}),
 		reloadCallback:  reloadCallback,
 		watcher:         watcher,
 		lastAuthHashes:  make(map[string]string),
@@ -135,6 +140,10 @@ func (w *Watcher) SetConfig(cfg *config.Config) {
 	w.clientsMutex.Lock()
 	defer w.clientsMutex.Unlock()
 	w.config = cfg
+	w.authDirs = configAuthDirs(cfg, w.authDir)
+	if len(w.authDirs) > 0 {
+		w.authDir = w.authDirs[0]
+	}
 	w.oldConfigYaml, _ = yaml.Marshal(cfg)
 }
 
@@ -145,49 +154,108 @@ func (w *Watcher) ApplyConfig(cfg *config.Config) {
 		return
 	}
 
-	w.SetConfig(cfg)
+	w.clientsMutex.RLock()
+	previousCfg := w.config
+	previousAuthDirs := append([]string(nil), w.authDirs...)
+	currentAuthDir := w.authDir
+	w.clientsMutex.RUnlock()
 
-	nextAuthDir := strings.TrimSpace(cfg.AuthDir)
-	if nextAuthDir == "" {
+	w.SetConfig(cfg)
+	w.syncConfigHashFromDisk()
+
+	nextAuthDirs := configAuthDirs(cfg, w.authDir)
+	if len(nextAuthDirs) == 0 {
 		return
 	}
 
-	w.switchAuthDir(nextAuthDir)
+	authDirChanged := !authDirSetsEqual(previousAuthDirs, nextAuthDirs)
+	w.switchAuthDirs(nextAuthDirs)
+
+	var affectedOAuthProviders []string
+	if previousCfg != nil {
+		_, affectedOAuthProviders = diff.DiffOAuthExcludedModelChanges(
+			previousCfg.OAuthExcludedModels,
+			cfg.OAuthExcludedModels,
+		)
+	}
+	retryConfigChanged := previousCfg != nil &&
+		(previousCfg.RequestRetry != cfg.RequestRetry ||
+			previousCfg.MaxRetryInterval != cfg.MaxRetryInterval ||
+			previousCfg.MaxRetryCredentials != cfg.MaxRetryCredentials)
+	forceAuthRefresh := previousCfg != nil &&
+		(previousCfg.ForceModelPrefix != cfg.ForceModelPrefix ||
+			!reflect.DeepEqual(previousCfg.OAuthModelAlias, cfg.OAuthModelAlias) ||
+			retryConfigChanged)
+
+	if shouldReloadAuthClients(previousCfg, cfg, authDirChanged, affectedOAuthProviders, forceAuthRefresh) {
+		if authDirChanged {
+			w.rebuildFileAuthCache(cfg)
+		}
+		w.refreshAuthState(forceAuthRefresh || authDirChanged || len(affectedOAuthProviders) > 0)
+		log.Infof(
+			"runtime auth state refreshed after ApplyConfig (authDirsChanged=%t previous=%s next=%s)",
+			authDirChanged,
+			strings.Join(previousAuthDirs, ", "),
+			strings.Join(nextAuthDirs, ", "),
+		)
+		return
+	}
+
+	log.Debugf(
+		"ApplyConfig updated watcher config without auth reload (authDirsChanged=%t current=%s)",
+		authDirChanged,
+		currentAuthDir,
+	)
 }
 
-func (w *Watcher) switchAuthDir(nextAuthDir string) {
+func (w *Watcher) switchAuthDirs(nextAuthDirs []string) {
 	if w == nil {
 		return
 	}
-	nextAuthDir = strings.TrimSpace(nextAuthDir)
-	if nextAuthDir == "" {
+	nextAuthDirs = uniqueAuthDirs(nextAuthDirs)
+	if len(nextAuthDirs) == 0 {
 		return
 	}
 
 	w.clientsMutex.Lock()
 	prevAuthDir := w.authDir
-	if w.normalizeAuthPath(prevAuthDir) == w.normalizeAuthPath(nextAuthDir) {
-		w.authDir = nextAuthDir
+	prevAuthDirs := append([]string(nil), w.authDirs...)
+	if authDirSetsEqual(prevAuthDirs, nextAuthDirs) {
+		w.authDirs = nextAuthDirs
+		w.authDir = nextAuthDirs[0]
 		w.clientsMutex.Unlock()
 		return
 	}
-	w.authDir = nextAuthDir
+	w.authDirs = nextAuthDirs
+	w.authDir = nextAuthDirs[0]
 	watcher := w.watcher
 	w.clientsMutex.Unlock()
 
 	if watcher == nil {
 		return
 	}
-	if strings.TrimSpace(prevAuthDir) != "" {
-		if err := watcher.Remove(prevAuthDir); err != nil {
-			log.WithError(err).Debugf("failed to remove previous auth directory watcher: %s", prevAuthDir)
+	for _, oldDir := range prevAuthDirs {
+		if strings.TrimSpace(oldDir) == "" || containsAuthDir(nextAuthDirs, oldDir) {
+			continue
+		}
+		if err := watcher.Remove(oldDir); err != nil {
+			log.WithError(err).Debugf("failed to remove previous auth directory watcher: %s", oldDir)
 		}
 	}
-	if err := watcher.Add(nextAuthDir); err != nil {
-		log.Errorf("failed to watch switched auth directory %s: %v", nextAuthDir, err)
-		return
+	for _, nextDir := range nextAuthDirs {
+		if containsAuthDir(prevAuthDirs, nextDir) {
+			continue
+		}
+		if err := watcher.Add(nextDir); err != nil {
+			log.Errorf("failed to watch switched auth directory %s: %v", nextDir, err)
+			return
+		}
 	}
-	log.Infof("auth directory watcher switched: %s -> %s", prevAuthDir, nextAuthDir)
+	log.Infof("auth directory watcher switched: %s -> %s", prevAuthDir, strings.Join(nextAuthDirs, ", "))
+}
+
+func (w *Watcher) switchAuthDir(nextAuthDir string) {
+	w.switchAuthDirs([]string{nextAuthDir})
 }
 
 // SetAuthUpdateQueue sets the queue used to emit auth updates.
@@ -206,6 +274,68 @@ func (w *Watcher) DispatchRuntimeAuthUpdate(update AuthUpdate) bool {
 func (w *Watcher) SnapshotCoreAuths() []*coreauth.Auth {
 	w.clientsMutex.RLock()
 	cfg := w.config
+	authDirs := append([]string(nil), w.authDirs...)
 	w.clientsMutex.RUnlock()
-	return snapshotCoreAuths(cfg, w.authDir)
+	return snapshotCoreAuths(cfg, authDirs)
+}
+
+func configAuthDirs(cfg *config.Config, fallbackAuthDir string) []string {
+	if cfg == nil {
+		return uniqueAuthDirs([]string{fallbackAuthDir})
+	}
+
+	authDirs := cfg.RuntimeAuthPoolPaths()
+	if len(authDirs) == 0 {
+		authDirs = []string{cfg.AuthDir}
+	}
+	if len(authDirs) == 0 {
+		authDirs = []string{fallbackAuthDir}
+	}
+	return uniqueAuthDirs(authDirs)
+}
+
+func uniqueAuthDirs(paths []string) []string {
+	seen := make(map[string]struct{}, len(paths))
+	out := make([]string, 0, len(paths))
+	for _, path := range paths {
+		normalized := pathutil.NormalizePath(path)
+		if normalized == "" {
+			continue
+		}
+		key := pathutil.NormalizeCompareKey(normalized)
+		if key == "" {
+			continue
+		}
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, normalized)
+	}
+	return out
+}
+
+func containsAuthDir(paths []string, target string) bool {
+	targetKey := pathutil.NormalizeCompareKey(target)
+	if targetKey == "" {
+		return false
+	}
+	for _, path := range paths {
+		if pathutil.NormalizeCompareKey(path) == targetKey {
+			return true
+		}
+	}
+	return false
+}
+
+func authDirSetsEqual(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for idx := range left {
+		if !pathutil.PathsEqual(left[idx], right[idx]) {
+			return false
+		}
+	}
+	return true
 }

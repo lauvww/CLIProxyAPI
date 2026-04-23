@@ -110,3 +110,43 @@ func TestApplyAPIKeyAliasesToSnapshotMergesBuckets(t *testing.T) {
 		t.Fatalf("merged details len = %d, want 2", len(modelBucket.Details))
 	}
 }
+
+func TestApplyAPIKeyAliasesToSnapshotUsesDetailClientAPIKey(t *testing.T) {
+	SetAPIKeyAliases(map[string]string{
+		"client-key-1": "Desktop",
+	})
+	t.Cleanup(func() {
+		SetAPIKeyAliases(nil)
+	})
+
+	snapshot := StatisticsSnapshot{
+		TotalRequests: 1,
+		SuccessCount:  1,
+		TotalTokens:   15,
+		APIs: map[string]APISnapshot{
+			"legacy-bucket": {
+				TotalRequests: 1,
+				TotalTokens:   15,
+				Models: map[string]ModelSnapshot{
+					"gpt-5.4": {
+						TotalRequests: 1,
+						TotalTokens:   15,
+						Details: []RequestDetail{{
+							Timestamp:    time.Date(2026, 4, 20, 3, 0, 0, 0, time.UTC),
+							ClientAPIKey: "client-key-1",
+							Tokens:       TokenStats{TotalTokens: 15},
+						}},
+					},
+				},
+			},
+		},
+	}
+
+	displaySnapshot := ApplyAPIKeyAliasesToSnapshot(snapshot)
+	if _, ok := displaySnapshot.APIs["Desktop"]; !ok {
+		t.Fatalf("expected aliased bucket Desktop, got %#v", displaySnapshot.APIs)
+	}
+	if _, ok := displaySnapshot.APIs["legacy-bucket"]; ok {
+		t.Fatalf("did not expect legacy bucket after alias mapping, got %#v", displaySnapshot.APIs)
+	}
+}

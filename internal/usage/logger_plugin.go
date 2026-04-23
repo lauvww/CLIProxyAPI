@@ -89,16 +89,17 @@ type modelStats struct {
 
 // RequestDetail stores the timestamp, latency, and token usage for a single request.
 type RequestDetail struct {
-	Timestamp time.Time  `json:"timestamp"`
-	LatencyMs int64      `json:"latency_ms"`
-	Source    string     `json:"source"`
-	AuthID    string     `json:"auth_id"`
-	AuthIndex string     `json:"auth_index"`
-	AuthPool  string     `json:"auth_pool,omitempty"`
-	PoolType  string     `json:"pool_type"`
-	PlanType  string     `json:"plan_type"`
-	Tokens    TokenStats `json:"tokens"`
-	Failed    bool       `json:"failed"`
+	Timestamp    time.Time  `json:"timestamp"`
+	LatencyMs    int64      `json:"latency_ms"`
+	ClientAPIKey string     `json:"client_api_key,omitempty"`
+	Source       string     `json:"source"`
+	AuthID       string     `json:"auth_id"`
+	AuthIndex    string     `json:"auth_index"`
+	AuthPool     string     `json:"auth_pool,omitempty"`
+	PoolType     string     `json:"pool_type"`
+	PlanType     string     `json:"plan_type"`
+	Tokens       TokenStats `json:"tokens"`
+	Failed       bool       `json:"failed"`
 }
 
 // TokenStats captures the token usage breakdown for a request.
@@ -202,16 +203,17 @@ func (s *RequestStatistics) Record(ctx context.Context, record coreusage.Record)
 		s.apis[statsKey] = stats
 	}
 	requestDetail := normalizeRequestDetailDimensions(RequestDetail{
-		Timestamp: timestamp,
-		LatencyMs: normaliseLatency(record.Latency),
-		Source:    record.Source,
-		AuthID:    record.AuthID,
-		AuthIndex: record.AuthIndex,
-		AuthPool:  record.AuthPool,
-		PoolType:  record.PoolType,
-		PlanType:  record.PlanType,
-		Tokens:    detail,
-		Failed:    failed,
+		Timestamp:    timestamp,
+		LatencyMs:    normaliseLatency(record.Latency),
+		ClientAPIKey: record.APIKey,
+		Source:       record.Source,
+		AuthID:       record.AuthID,
+		AuthIndex:    record.AuthIndex,
+		AuthPool:     record.AuthPool,
+		PoolType:     record.PoolType,
+		PlanType:     record.PlanType,
+		Tokens:       detail,
+		Failed:       failed,
 	})
 	s.updateAPIStats(stats, modelName, requestDetail)
 

@@ -172,3 +172,99 @@ func TestLoadRecentSnapshotFallsBackToLegacyFileName(t *testing.T) {
 		t.Fatalf("loaded.TotalRequests = %d, want 1", loaded.TotalRequests)
 	}
 }
+
+func TestCanonicalizeAPIUsageSnapshotMergesLegacyBuckets(t *testing.T) {
+	snapshot := StatisticsSnapshot{
+		TotalRequests: 4,
+		SuccessCount:  4,
+		TotalTokens:   100,
+		APIs: map[string]APISnapshot{
+			"Local": {
+				TotalRequests: 1,
+				TotalTokens:   10,
+				Models: map[string]ModelSnapshot{
+					"gpt-5.4": {
+						TotalRequests: 1,
+						TotalTokens:   10,
+						Details: []RequestDetail{{
+							Timestamp: time.Date(2026, 4, 20, 1, 0, 0, 0, time.UTC),
+							Tokens:    TokenStats{TotalTokens: 10},
+						}},
+					},
+				},
+			},
+			"Remote": {
+				TotalRequests: 1,
+				TotalTokens:   20,
+				Models: map[string]ModelSnapshot{
+					"gpt-5.4": {
+						TotalRequests: 1,
+						TotalTokens:   20,
+						Details: []RequestDetail{{
+							Timestamp: time.Date(2026, 4, 20, 2, 0, 0, 0, time.UTC),
+							Tokens:    TokenStats{TotalTokens: 20},
+						}},
+					},
+				},
+			},
+			"杩滅▼": {
+				TotalRequests: 1,
+				TotalTokens:   30,
+				Models: map[string]ModelSnapshot{
+					"gpt-5.4": {
+						TotalRequests: 1,
+						TotalTokens:   30,
+						Details: []RequestDetail{{
+							Timestamp: time.Date(2026, 4, 20, 3, 0, 0, 0, time.UTC),
+							Tokens:    TokenStats{TotalTokens: 30},
+						}},
+					},
+				},
+			},
+			"sk-H3vtFmzXhwO7D8eGP": {
+				TotalRequests: 1,
+				TotalTokens:   40,
+				Models: map[string]ModelSnapshot{
+					"gpt-5.4": {
+						TotalRequests: 1,
+						TotalTokens:   40,
+						Details: []RequestDetail{{
+							Timestamp: time.Date(2026, 4, 20, 4, 0, 0, 0, time.UTC),
+							Tokens:    TokenStats{TotalTokens: 40},
+						}},
+					},
+				},
+			},
+		},
+	}
+
+	canonicalized, changed := CanonicalizeAPIUsageSnapshot(snapshot)
+	if !changed {
+		t.Fatal("expected canonicalization to report changes")
+	}
+	if _, ok := canonicalized.APIs["Local"]; ok {
+		t.Fatalf("did not expect Local bucket after canonicalization: %#v", canonicalized.APIs)
+	}
+	if _, ok := canonicalized.APIs["Remote"]; ok {
+		t.Fatalf("did not expect Remote bucket after canonicalization: %#v", canonicalized.APIs)
+	}
+	if _, ok := canonicalized.APIs["杩滅▼"]; ok {
+		t.Fatalf("did not expect garbled bucket after canonicalization: %#v", canonicalized.APIs)
+	}
+
+	bookBucket, ok := canonicalized.APIs[canonicalWWBookKey]
+	if !ok {
+		t.Fatalf("expected ww-Book canonical bucket, got %#v", canonicalized.APIs)
+	}
+	if bookBucket.TotalRequests != 2 {
+		t.Fatalf("ww-Book total_requests = %d, want 2", bookBucket.TotalRequests)
+	}
+
+	pcBucket, ok := canonicalized.APIs[canonicalWWPcKey]
+	if !ok {
+		t.Fatalf("expected ww-Pc canonical bucket, got %#v", canonicalized.APIs)
+	}
+	if pcBucket.TotalRequests != 2 {
+		t.Fatalf("ww-Pc total_requests = %d, want 2", pcBucket.TotalRequests)
+	}
+}

@@ -61,69 +61,13 @@ func (w *Watcher) reloadClients(rescanAuth bool, affectedOAuthProviders []string
 
 	var authFileCount int
 	if rescanAuth {
-		authFileCount = w.loadFileClients(cfg)
+		authFileCount = w.rebuildFileAuthCache(cfg)
 		log.Debugf("loaded %d file-based clients", authFileCount)
 	} else {
 		w.clientsMutex.RLock()
 		authFileCount = len(w.lastAuthHashes)
 		w.clientsMutex.RUnlock()
 		log.Debugf("skipping auth directory rescan; retaining %d existing auth files", authFileCount)
-	}
-
-	if rescanAuth {
-		w.clientsMutex.Lock()
-
-		w.lastAuthHashes = make(map[string]string)
-		cacheAuthContents := log.IsLevelEnabled(log.DebugLevel)
-		if cacheAuthContents {
-			w.lastAuthContents = make(map[string]*coreauth.Auth)
-		} else {
-			w.lastAuthContents = nil
-		}
-		w.fileAuthsByPath = make(map[string]map[string]*coreauth.Auth)
-		if resolvedAuthDir, errResolveAuthDir := util.ResolveAuthDir(cfg.AuthDir); errResolveAuthDir != nil {
-			log.Errorf("failed to resolve auth directory for hash cache: %v", errResolveAuthDir)
-		} else if resolvedAuthDir != "" {
-			entries, errReadDir := os.ReadDir(resolvedAuthDir)
-			if errReadDir != nil {
-				log.Errorf("failed to read auth directory for hash cache: %v", errReadDir)
-			} else {
-				for _, entry := range entries {
-					if entry == nil || entry.IsDir() {
-						continue
-					}
-					name := entry.Name()
-					if !strings.HasSuffix(strings.ToLower(name), ".json") {
-						continue
-					}
-					fullPath := filepath.Join(resolvedAuthDir, name)
-					if data, errReadFile := os.ReadFile(fullPath); errReadFile == nil && len(data) > 0 {
-						sum := sha256.Sum256(data)
-						normalizedPath := w.normalizeAuthPath(fullPath)
-						w.lastAuthHashes[normalizedPath] = hex.EncodeToString(sum[:])
-						// Parse and cache auth content for future diff comparisons (debug only).
-						if cacheAuthContents {
-							var auth coreauth.Auth
-							if errParse := json.Unmarshal(data, &auth); errParse == nil {
-								w.lastAuthContents[normalizedPath] = &auth
-							}
-						}
-						ctx := &synthesizer.SynthesisContext{
-							Config:      cfg,
-							AuthDir:     resolvedAuthDir,
-							Now:         time.Now(),
-							IDGenerator: synthesizer.NewStableIDGenerator(),
-						}
-						if generated := synthesizer.SynthesizeAuthFile(ctx, fullPath, data); len(generated) > 0 {
-							if pathAuths := authSliceToMap(generated); len(pathAuths) > 0 {
-								w.fileAuthsByPath[normalizedPath] = authIDSet(pathAuths)
-							}
-						}
-					}
-				}
-			}
-		}
-		w.clientsMutex.Unlock()
 	}
 
 	totalNewClients := authFileCount + geminiAPIKeyCount + vertexCompatAPIKeyCount + claudeAPIKeyCount + codexAPIKeyCount + openAICompatCount
@@ -144,6 +88,76 @@ func (w *Watcher) reloadClients(rescanAuth bool, affectedOAuthProviders []string
 		codexAPIKeyCount,
 		openAICompatCount,
 	)
+}
+
+func (w *Watcher) rebuildFileAuthCache(cfg *config.Config) int {
+	if w == nil || cfg == nil {
+		return 0
+	}
+
+	authFileCount := 0
+	lastAuthHashes := make(map[string]string)
+	fileAuthsByPath := make(map[string]map[string]*coreauth.Auth)
+	cacheAuthContents := log.IsLevelEnabled(log.DebugLevel)
+	var lastAuthContents map[string]*coreauth.Auth
+	if cacheAuthContents {
+		lastAuthContents = make(map[string]*coreauth.Auth)
+	}
+
+	for _, resolvedAuthDir := range configAuthDirs(cfg, w.authDir) {
+		entries, errReadDir := os.ReadDir(resolvedAuthDir)
+		if errReadDir != nil {
+			log.Errorf("failed to read auth directory for hash cache: %v", errReadDir)
+			continue
+		}
+		for _, entry := range entries {
+			if entry == nil || entry.IsDir() {
+				continue
+			}
+			name := entry.Name()
+			if !strings.HasSuffix(strings.ToLower(name), ".json") {
+				continue
+			}
+			authFileCount++
+			fullPath := filepath.Join(resolvedAuthDir, name)
+			data, errReadFile := os.ReadFile(fullPath)
+			if errReadFile != nil || len(data) == 0 {
+				continue
+			}
+			sum := sha256.Sum256(data)
+			normalizedPath := w.normalizeAuthPath(fullPath)
+			lastAuthHashes[normalizedPath] = hex.EncodeToString(sum[:])
+			if cacheAuthContents {
+				var auth coreauth.Auth
+				if errParse := json.Unmarshal(data, &auth); errParse == nil {
+					lastAuthContents[normalizedPath] = &auth
+				}
+			}
+			ctx := &synthesizer.SynthesisContext{
+				Config:      cfg,
+				AuthDir:     resolvedAuthDir,
+				Now:         time.Now(),
+				IDGenerator: synthesizer.NewStableIDGenerator(),
+			}
+			if generated := synthesizer.SynthesizeAuthFile(ctx, fullPath, data); len(generated) > 0 {
+				if pathAuths := authSliceToMap(generated); len(pathAuths) > 0 {
+					fileAuthsByPath[normalizedPath] = authIDSet(pathAuths)
+				}
+			}
+		}
+	}
+
+	w.clientsMutex.Lock()
+	w.lastAuthHashes = lastAuthHashes
+	if cacheAuthContents {
+		w.lastAuthContents = lastAuthContents
+	} else {
+		w.lastAuthContents = nil
+	}
+	w.fileAuthsByPath = fileAuthsByPath
+	w.clientsMutex.Unlock()
+
+	return authFileCount
 }
 
 func (w *Watcher) addOrUpdateClient(path string) {
@@ -215,9 +229,10 @@ func (w *Watcher) addOrUpdateClient(path string) {
 	}
 
 	// Build synthesized auth entries for this single file only.
+	fileAuthDir := w.authDirForPath(path)
 	sctx := &synthesizer.SynthesisContext{
 		Config:      w.config,
-		AuthDir:     w.authDir,
+		AuthDir:     fileAuthDir,
 		Now:         time.Now(),
 		IDGenerator: synthesizer.NewStableIDGenerator(),
 	}
@@ -303,37 +318,52 @@ func (w *Watcher) loadFileClients(cfg *config.Config) int {
 	authFileCount := 0
 	successfulAuthCount := 0
 
-	authDir, errResolveAuthDir := util.ResolveAuthDir(cfg.AuthDir)
-	if errResolveAuthDir != nil {
-		log.Errorf("failed to resolve auth directory: %v", errResolveAuthDir)
-		return 0
-	}
-	if authDir == "" {
-		return 0
+	authDirs := configAuthDirs(cfg, w.authDir)
+	if len(authDirs) == 0 {
+		if authDir, errResolveAuthDir := util.ResolveAuthDir(cfg.AuthDir); errResolveAuthDir == nil && authDir != "" {
+			authDirs = []string{authDir}
+		}
 	}
 
-	entries, errReadDir := os.ReadDir(authDir)
-	if errReadDir != nil {
-		log.Errorf("error reading auth directory: %v", errReadDir)
-		return 0
-	}
-	for _, entry := range entries {
-		if entry == nil || entry.IsDir() {
+	for _, authDir := range authDirs {
+		entries, errReadDir := os.ReadDir(authDir)
+		if errReadDir != nil {
+			log.Errorf("error reading auth directory: %v", errReadDir)
 			continue
 		}
-		name := entry.Name()
-		if !strings.HasSuffix(strings.ToLower(name), ".json") {
-			continue
-		}
-		authFileCount++
-		log.Debugf("processing auth file %d: %s", authFileCount, name)
-		fullPath := filepath.Join(authDir, name)
-		if data, errReadFile := os.ReadFile(fullPath); errReadFile == nil && len(data) > 0 {
-			successfulAuthCount++
+		for _, entry := range entries {
+			if entry == nil || entry.IsDir() {
+				continue
+			}
+			name := entry.Name()
+			if !strings.HasSuffix(strings.ToLower(name), ".json") {
+				continue
+			}
+			authFileCount++
+			log.Debugf("processing auth file %d: %s", authFileCount, name)
+			fullPath := filepath.Join(authDir, name)
+			if data, errReadFile := os.ReadFile(fullPath); errReadFile == nil && len(data) > 0 {
+				successfulAuthCount++
+			}
 		}
 	}
 	log.Debugf("auth directory scan complete - found %d .json files, %d readable", authFileCount, successfulAuthCount)
 	return authFileCount
+}
+
+func (w *Watcher) authDirForPath(path string) string {
+	w.clientsMutex.RLock()
+	authDirs := append([]string(nil), w.authDirs...)
+	fallbackAuthDir := w.authDir
+	w.clientsMutex.RUnlock()
+
+	normalizedPath := w.normalizeAuthPath(path)
+	for _, authDir := range authDirs {
+		if filepath.Dir(normalizedPath) == w.normalizeAuthPath(authDir) {
+			return authDir
+		}
+	}
+	return fallbackAuthDir
 }
 
 func BuildAPIKeyClients(cfg *config.Config) (int, int, int, int, int) {

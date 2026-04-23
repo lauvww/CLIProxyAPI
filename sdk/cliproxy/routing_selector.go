@@ -1,9 +1,12 @@
 package cliproxy
 
 import (
+	"sort"
 	"strings"
 	"time"
 
+	internalconfig "github.com/router-for-me/CLIProxyAPI/v6/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/pathutil"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPI/v6/sdk/config"
 )
@@ -13,6 +16,9 @@ type resolvedRoutingSelectorConfig struct {
 	sessionAffinity  bool
 	sessionTTLString string
 	sessionTTL       time.Duration
+	authPoolEnabled  bool
+	authPoolMode     string
+	authPoolRouting  string
 }
 
 func resolveRoutingSelectorConfig(cfg *config.Config) resolvedRoutingSelectorConfig {
@@ -41,11 +47,19 @@ func resolveRoutingSelectorConfig(cfg *config.Config) resolvedRoutingSelectorCon
 		}
 	}
 
+	resolved.authPoolEnabled = cfg.AuthPool.Enabled
+	resolved.authPoolMode = cfg.AuthPoolModeValue()
+	resolved.authPoolRouting = authPoolRoutingSignature(cfg)
+
 	return resolved
 }
 
 func buildRoutingSelector(cfg *config.Config) coreauth.Selector {
 	resolved := resolveRoutingSelectorConfig(cfg)
+
+	if cfg != nil && cfg.AuthPool.Enabled && cfg.AuthPoolModeValue() == "multi" {
+		return coreauth.NewAuthPoolStrategySelector((*internalconfig.Config)(cfg))
+	}
 
 	var selector coreauth.Selector
 	switch resolved.strategy {
@@ -63,4 +77,19 @@ func buildRoutingSelector(cfg *config.Config) coreauth.Selector {
 	}
 
 	return selector
+}
+
+func authPoolRoutingSignature(cfg *config.Config) string {
+	if cfg == nil || len(cfg.AuthPool.RoutingStrategyByPath) == 0 {
+		return ""
+	}
+
+	pairs := make([]string, 0, len(cfg.AuthPool.RoutingStrategyByPath))
+	for path, strategy := range cfg.AuthPool.RoutingStrategyByPath {
+		if key := pathutil.NormalizeCompareKey(path); key != "" {
+			pairs = append(pairs, key+"="+strings.ToLower(strings.TrimSpace(strategy)))
+		}
+	}
+	sort.Strings(pairs)
+	return strings.Join(pairs, "|")
 }

@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"os"
 	"reflect"
+	"strings"
 	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
@@ -16,6 +17,42 @@ import (
 
 	log "github.com/sirupsen/logrus"
 )
+
+func (w *Watcher) syncConfigHashFromDisk() {
+	if w == nil || strings.TrimSpace(w.configPath) == "" {
+		return
+	}
+	data, err := os.ReadFile(w.configPath)
+	if err != nil || len(data) == 0 {
+		return
+	}
+	sum := sha256.Sum256(data)
+	hash := hex.EncodeToString(sum[:])
+	w.clientsMutex.Lock()
+	w.lastConfigHash = hash
+	w.clientsMutex.Unlock()
+}
+
+func shouldReloadAuthClients(
+	oldConfig *config.Config,
+	newConfig *config.Config,
+	authDirChanged bool,
+	affectedOAuthProviders []string,
+	forceAuthRefresh bool,
+) bool {
+	if oldConfig == nil || newConfig == nil {
+		return true
+	}
+	if authDirChanged || forceAuthRefresh || len(affectedOAuthProviders) > 0 {
+		return true
+	}
+
+	return !reflect.DeepEqual(oldConfig.GeminiKey, newConfig.GeminiKey) ||
+		!reflect.DeepEqual(oldConfig.VertexCompatAPIKey, newConfig.VertexCompatAPIKey) ||
+		!reflect.DeepEqual(oldConfig.ClaudeKey, newConfig.ClaudeKey) ||
+		!reflect.DeepEqual(oldConfig.CodexKey, newConfig.CodexKey) ||
+		!reflect.DeepEqual(oldConfig.OpenAICompatibility, newConfig.OpenAICompatibility)
+}
 
 func (w *Watcher) stopConfigReloadTimer() {
 	w.configReloadMu.Lock()
@@ -127,11 +164,19 @@ func (w *Watcher) reloadConfig() bool {
 		}
 	}
 
-	authDirChanged := oldConfig == nil || oldConfig.AuthDir != newConfig.AuthDir
+	authDirChanged := !authDirSetsEqual(configAuthDirs(oldConfig, ""), configAuthDirs(newConfig, ""))
 	retryConfigChanged := oldConfig != nil && (oldConfig.RequestRetry != newConfig.RequestRetry || oldConfig.MaxRetryInterval != newConfig.MaxRetryInterval || oldConfig.MaxRetryCredentials != newConfig.MaxRetryCredentials)
 	forceAuthRefresh := oldConfig != nil && (oldConfig.ForceModelPrefix != newConfig.ForceModelPrefix || !reflect.DeepEqual(oldConfig.OAuthModelAlias, newConfig.OAuthModelAlias) || retryConfigChanged)
 	if authDirChanged {
-		w.switchAuthDir(newConfig.AuthDir)
+		w.switchAuthDirs(configAuthDirs(newConfig, w.authDir))
+	}
+
+	if !shouldReloadAuthClients(oldConfig, newConfig, authDirChanged, affectedOAuthProviders, forceAuthRefresh) {
+		log.Infof("config successfully reloaded without auth/client rebuild")
+		if w.reloadCallback != nil {
+			w.reloadCallback(newConfig)
+		}
+		return true
 	}
 
 	log.Infof("config successfully reloaded, triggering client reload")

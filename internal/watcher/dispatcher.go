@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"strings"
 	"sync"
 	"time"
 
@@ -80,9 +81,12 @@ func (w *Watcher) dispatchRuntimeAuthUpdate(update AuthUpdate) bool {
 func (w *Watcher) refreshAuthState(force bool) {
 	w.clientsMutex.RLock()
 	cfg := w.config
-	authDir := w.authDir
+	authDirs := append([]string(nil), w.authDirs...)
+	if len(authDirs) == 0 && strings.TrimSpace(w.authDir) != "" {
+		authDirs = []string{w.authDir}
+	}
 	w.clientsMutex.RUnlock()
-	auths := snapshotCoreAuthsFunc(cfg, authDir)
+	auths := snapshotCoreAuthsFunc(cfg, authDirs)
 	w.clientsMutex.Lock()
 	if len(w.runtimeAuths) > 0 {
 		for _, a := range w.runtimeAuths {
@@ -255,10 +259,9 @@ func normalizeAuth(a *coreauth.Auth) *coreauth.Auth {
 	return clone
 }
 
-func snapshotCoreAuths(cfg *config.Config, authDir string) []*coreauth.Auth {
+func snapshotCoreAuths(cfg *config.Config, authDirs []string) []*coreauth.Auth {
 	ctx := &synthesizer.SynthesisContext{
 		Config:      cfg,
-		AuthDir:     authDir,
 		Now:         time.Now(),
 		IDGenerator: synthesizer.NewStableIDGenerator(),
 	}
@@ -271,8 +274,11 @@ func snapshotCoreAuths(cfg *config.Config, authDir string) []*coreauth.Auth {
 	}
 
 	fileSynth := synthesizer.NewFileSynthesizer()
-	if auths, err := fileSynth.Synthesize(ctx); err == nil {
-		out = append(out, auths...)
+	for _, authDir := range authDirs {
+		ctx.AuthDir = authDir
+		if auths, err := fileSynth.Synthesize(ctx); err == nil {
+			out = append(out, auths...)
+		}
 	}
 
 	return out

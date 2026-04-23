@@ -33,11 +33,18 @@ func (w *Watcher) start(ctx context.Context) error {
 	}
 	log.Debugf("watching config file: %s", w.configPath)
 
-	if errAddAuthDir := w.watcher.Add(w.authDir); errAddAuthDir != nil {
-		log.Errorf("failed to watch auth directory %s: %v", w.authDir, errAddAuthDir)
-		return errAddAuthDir
+	authDirs := append([]string(nil), w.authDirs...)
+	if len(authDirs) == 0 && strings.TrimSpace(w.authDir) != "" {
+		authDirs = []string{w.authDir}
 	}
-	log.Debugf("watching auth directory: %s", w.authDir)
+	for _, authDir := range authDirs {
+		if errAddAuthDir := w.watcher.Add(authDir); errAddAuthDir != nil {
+			log.Errorf("failed to watch auth directory %s: %v", authDir, errAddAuthDir)
+			return errAddAuthDir
+		}
+		log.Debugf("watching auth directory: %s", authDir)
+	}
+	w.syncConfigHashFromDisk()
 
 	go w.processEvents(ctx)
 
@@ -70,13 +77,24 @@ func (w *Watcher) handleEvent(event fsnotify.Event) {
 	normalizedName := w.normalizeAuthPath(event.Name)
 	w.clientsMutex.RLock()
 	configPath := w.configPath
-	authDir := w.authDir
+	authDirs := append([]string(nil), w.authDirs...)
+	if len(authDirs) == 0 && strings.TrimSpace(w.authDir) != "" {
+		authDirs = []string{w.authDir}
+	}
 	w.clientsMutex.RUnlock()
 	normalizedConfigPath := w.normalizeAuthPath(configPath)
-	normalizedAuthDir := w.normalizeAuthPath(authDir)
 	isConfigEvent := normalizedName == normalizedConfigPath && event.Op&configOps != 0
 	authOps := fsnotify.Create | fsnotify.Write | fsnotify.Remove | fsnotify.Rename
-	isAuthJSON := filepath.Dir(normalizedName) == normalizedAuthDir && strings.HasSuffix(normalizedName, ".json") && event.Op&authOps != 0
+	isAuthJSON := false
+	if strings.HasSuffix(normalizedName, ".json") && event.Op&authOps != 0 {
+		normalizedDir := filepath.Dir(normalizedName)
+		for _, authDir := range authDirs {
+			if normalizedDir == w.normalizeAuthPath(authDir) {
+				isAuthJSON = true
+				break
+			}
+		}
+	}
 	if !isConfigEvent && !isAuthJSON {
 		// Ignore unrelated files (e.g., cookie snapshots *.cookie) and other noise.
 		return

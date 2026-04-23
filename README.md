@@ -86,7 +86,7 @@ CLIProxyAPI Guides: [https://help.router-for.me/](https://help.router-for.me/)
 
 See [VERSIONING.md](VERSIONING.md) for the fork's version source of truth, update-check behavior, and local build workflow.
 
-This repository now ships on the coordinated `2.x` line. Backend and management UI releases are expected to move together unless a release note explicitly says otherwise.
+This repository now ships on the coordinated `2.2.1` line. Backend and management UI releases are expected to move together unless a release note explicitly says otherwise.
 
 Local binaries built with `scripts/build-local.ps1` default to the embedded model catalog for stable desktop behavior.
 
@@ -126,6 +126,7 @@ These routes help you select the protocol surface, but they do not by themselves
 - Advanced (executors & translators): [docs/sdk-advanced.md](docs/sdk-advanced.md)
 - Access: [docs/sdk-access.md](docs/sdk-access.md)
 - Watcher: [docs/sdk-watcher.md](docs/sdk-watcher.md)
+- Architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 - Custom Provider Example: `examples/custom-provider`
 
 ## Contributing

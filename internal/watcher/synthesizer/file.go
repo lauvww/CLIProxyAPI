@@ -132,6 +132,7 @@ func synthesizeFileAuths(ctx *SynthesisContext, fullPath string, data []byte) []
 			"source":    fullPath,
 			"path":      fullPath,
 			"auth_pool": ctx.AuthDir,
+			"pool_type": inferAuthPoolType(ctx.AuthDir),
 		},
 		ProxyURL:  proxyURL,
 		Metadata:  metadata,
@@ -230,6 +231,7 @@ func SynthesizeGeminiVirtualAuths(primary *coreauth.Auth, metadata map[string]an
 		}
 		if authPool != "" {
 			attrs["auth_pool"] = authPool
+			attrs["pool_type"] = inferAuthPoolType(authPool)
 		}
 		// Propagate priority from primary auth to virtual auths
 		if priorityVal, hasPriority := primary.Attributes["priority"]; hasPriority && priorityVal != "" {

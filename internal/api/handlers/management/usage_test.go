@@ -10,6 +10,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/usage"
+	coreusage "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/usage"
 )
 
 func TestGetUsageStatisticsWithPoolFilter(t *testing.T) {
@@ -291,6 +292,61 @@ func TestGetUsageStatisticsDoesNotDefaultToAuthPoolWhenDisabled(t *testing.T) {
 	}
 	if got := intFromAny(usagePayload["total_requests"]); got != 2 {
 		t.Fatalf("usage.total_requests = %d, want 2", got)
+	}
+}
+
+func TestGetUsageStatisticsAppliesAPIKeyAliases(t *testing.T) {
+	t.Helper()
+	gin.SetMode(gin.TestMode)
+
+	usage.SetAPIKeyAliases(map[string]string{
+		"client-key-1": "Desktop",
+	})
+	t.Cleanup(func() {
+		usage.SetAPIKeyAliases(nil)
+	})
+
+	stats := usage.NewRequestStatistics()
+	stats.Record(nil, coreusage.Record{
+		APIKey:      "client-key-1",
+		Model:       "gpt-5.4",
+		RequestedAt: time.Date(2026, 4, 21, 10, 0, 0, 0, time.UTC),
+		Detail: coreusage.Detail{
+			InputTokens:  10,
+			OutputTokens: 5,
+			TotalTokens:  15,
+		},
+	})
+
+	handler := &Handler{usageStats: stats}
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/usage", nil)
+
+	handler.GetUsageStatistics(ctx)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status code = %d, want %d", recorder.Code, http.StatusOK)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+
+	usagePayload, ok := payload["usage"].(map[string]any)
+	if !ok {
+		t.Fatalf("usage payload missing or invalid: %v", payload["usage"])
+	}
+	apis, ok := usagePayload["apis"].(map[string]any)
+	if !ok {
+		t.Fatalf("usage.apis missing or invalid: %v", usagePayload["apis"])
+	}
+	if _, ok := apis["Desktop"]; !ok {
+		t.Fatalf("expected aliased bucket Desktop, got %#v", apis)
+	}
+	if _, ok := apis["client-key-1"]; ok {
+		t.Fatalf("did not expect raw bucket after alias mapping, got %#v", apis)
 	}
 }
 

@@ -44,6 +44,8 @@ func (s *ConfigSynthesizer) synthesizeGeminiKeys(ctx *SynthesisContext) []*corea
 	cfg := ctx.Config
 	now := ctx.Now
 	idGen := ctx.IDGenerator
+	targetPools := configAuthPoolsForSynthesis(ctx)
+	multiPool := cfg != nil && cfg.MultiAuthPoolEnabled()
 
 	out := make([]*coreauth.Auth, 0, len(cfg.GeminiKey))
 	for i := range cfg.GeminiKey {
@@ -55,34 +57,45 @@ func (s *ConfigSynthesizer) synthesizeGeminiKeys(ctx *SynthesisContext) []*corea
 		prefix := strings.TrimSpace(entry.Prefix)
 		base := strings.TrimSpace(entry.BaseURL)
 		proxyURL := strings.TrimSpace(entry.ProxyURL)
-		id, token := idGen.Next("gemini:apikey", key, base)
-		attrs := map[string]string{
-			"source":  fmt.Sprintf("config:gemini[%s]", token),
-			"api_key": key,
+		pools := targetPools
+		if len(pools) == 0 {
+			pools = []string{""}
 		}
-		if entry.Priority != 0 {
-			attrs["priority"] = strconv.Itoa(entry.Priority)
+		for _, authPool := range pools {
+			idParts := []string{key, base}
+			if multiPool {
+				idParts = append(idParts, authPool)
+			}
+			id, token := idGen.Next("gemini:apikey", idParts...)
+			attrs := map[string]string{
+				"source":  fmt.Sprintf("config:gemini[%s]", token),
+				"api_key": key,
+			}
+			applyAuthPoolAttrs(attrs, authPool)
+			if entry.Priority != 0 {
+				attrs["priority"] = strconv.Itoa(entry.Priority)
+			}
+			if base != "" {
+				attrs["base_url"] = base
+			}
+			if hash := diff.ComputeGeminiModelsHash(entry.Models); hash != "" {
+				attrs["models_hash"] = hash
+			}
+			addConfigHeadersToAttrs(entry.Headers, attrs)
+			a := &coreauth.Auth{
+				ID:         id,
+				Provider:   "gemini",
+				Label:      "gemini-apikey",
+				Prefix:     prefix,
+				Status:     coreauth.StatusActive,
+				ProxyURL:   proxyURL,
+				Attributes: attrs,
+				CreatedAt:  now,
+				UpdatedAt:  now,
+			}
+			ApplyAuthExcludedModelsMeta(a, cfg, entry.ExcludedModels, "apikey")
+			out = append(out, a)
 		}
-		if base != "" {
-			attrs["base_url"] = base
-		}
-		if hash := diff.ComputeGeminiModelsHash(entry.Models); hash != "" {
-			attrs["models_hash"] = hash
-		}
-		addConfigHeadersToAttrs(entry.Headers, attrs)
-		a := &coreauth.Auth{
-			ID:         id,
-			Provider:   "gemini",
-			Label:      "gemini-apikey",
-			Prefix:     prefix,
-			Status:     coreauth.StatusActive,
-			ProxyURL:   proxyURL,
-			Attributes: attrs,
-			CreatedAt:  now,
-			UpdatedAt:  now,
-		}
-		ApplyAuthExcludedModelsMeta(a, cfg, entry.ExcludedModels, "apikey")
-		out = append(out, a)
 	}
 	return out
 }
@@ -92,6 +105,8 @@ func (s *ConfigSynthesizer) synthesizeClaudeKeys(ctx *SynthesisContext) []*corea
 	cfg := ctx.Config
 	now := ctx.Now
 	idGen := ctx.IDGenerator
+	targetPools := configAuthPoolsForSynthesis(ctx)
+	multiPool := cfg != nil && cfg.MultiAuthPoolEnabled()
 
 	out := make([]*coreauth.Auth, 0, len(cfg.ClaudeKey))
 	for i := range cfg.ClaudeKey {
@@ -102,35 +117,46 @@ func (s *ConfigSynthesizer) synthesizeClaudeKeys(ctx *SynthesisContext) []*corea
 		}
 		prefix := strings.TrimSpace(ck.Prefix)
 		base := strings.TrimSpace(ck.BaseURL)
-		id, token := idGen.Next("claude:apikey", key, base)
-		attrs := map[string]string{
-			"source":  fmt.Sprintf("config:claude[%s]", token),
-			"api_key": key,
+		pools := targetPools
+		if len(pools) == 0 {
+			pools = []string{""}
 		}
-		if ck.Priority != 0 {
-			attrs["priority"] = strconv.Itoa(ck.Priority)
+		for _, authPool := range pools {
+			idParts := []string{key, base}
+			if multiPool {
+				idParts = append(idParts, authPool)
+			}
+			id, token := idGen.Next("claude:apikey", idParts...)
+			attrs := map[string]string{
+				"source":  fmt.Sprintf("config:claude[%s]", token),
+				"api_key": key,
+			}
+			applyAuthPoolAttrs(attrs, authPool)
+			if ck.Priority != 0 {
+				attrs["priority"] = strconv.Itoa(ck.Priority)
+			}
+			if base != "" {
+				attrs["base_url"] = base
+			}
+			if hash := diff.ComputeClaudeModelsHash(ck.Models); hash != "" {
+				attrs["models_hash"] = hash
+			}
+			addConfigHeadersToAttrs(ck.Headers, attrs)
+			proxyURL := strings.TrimSpace(ck.ProxyURL)
+			a := &coreauth.Auth{
+				ID:         id,
+				Provider:   "claude",
+				Label:      "claude-apikey",
+				Prefix:     prefix,
+				Status:     coreauth.StatusActive,
+				ProxyURL:   proxyURL,
+				Attributes: attrs,
+				CreatedAt:  now,
+				UpdatedAt:  now,
+			}
+			ApplyAuthExcludedModelsMeta(a, cfg, ck.ExcludedModels, "apikey")
+			out = append(out, a)
 		}
-		if base != "" {
-			attrs["base_url"] = base
-		}
-		if hash := diff.ComputeClaudeModelsHash(ck.Models); hash != "" {
-			attrs["models_hash"] = hash
-		}
-		addConfigHeadersToAttrs(ck.Headers, attrs)
-		proxyURL := strings.TrimSpace(ck.ProxyURL)
-		a := &coreauth.Auth{
-			ID:         id,
-			Provider:   "claude",
-			Label:      "claude-apikey",
-			Prefix:     prefix,
-			Status:     coreauth.StatusActive,
-			ProxyURL:   proxyURL,
-			Attributes: attrs,
-			CreatedAt:  now,
-			UpdatedAt:  now,
-		}
-		ApplyAuthExcludedModelsMeta(a, cfg, ck.ExcludedModels, "apikey")
-		out = append(out, a)
 	}
 	return out
 }
@@ -140,6 +166,8 @@ func (s *ConfigSynthesizer) synthesizeCodexKeys(ctx *SynthesisContext) []*coreau
 	cfg := ctx.Config
 	now := ctx.Now
 	idGen := ctx.IDGenerator
+	targetPools := configAuthPoolsForSynthesis(ctx)
+	multiPool := cfg != nil && cfg.MultiAuthPoolEnabled()
 
 	out := make([]*coreauth.Auth, 0, len(cfg.CodexKey))
 	for i := range cfg.CodexKey {
@@ -149,38 +177,49 @@ func (s *ConfigSynthesizer) synthesizeCodexKeys(ctx *SynthesisContext) []*coreau
 			continue
 		}
 		prefix := strings.TrimSpace(ck.Prefix)
-		id, token := idGen.Next("codex:apikey", key, ck.BaseURL)
-		attrs := map[string]string{
-			"source":  fmt.Sprintf("config:codex[%s]", token),
-			"api_key": key,
+		pools := targetPools
+		if len(pools) == 0 {
+			pools = []string{""}
 		}
-		if ck.Priority != 0 {
-			attrs["priority"] = strconv.Itoa(ck.Priority)
+		for _, authPool := range pools {
+			idParts := []string{key, ck.BaseURL}
+			if multiPool {
+				idParts = append(idParts, authPool)
+			}
+			id, token := idGen.Next("codex:apikey", idParts...)
+			attrs := map[string]string{
+				"source":  fmt.Sprintf("config:codex[%s]", token),
+				"api_key": key,
+			}
+			applyAuthPoolAttrs(attrs, authPool)
+			if ck.Priority != 0 {
+				attrs["priority"] = strconv.Itoa(ck.Priority)
+			}
+			if ck.BaseURL != "" {
+				attrs["base_url"] = ck.BaseURL
+			}
+			if ck.Websockets {
+				attrs["websockets"] = "true"
+			}
+			if hash := diff.ComputeCodexModelsHash(ck.Models); hash != "" {
+				attrs["models_hash"] = hash
+			}
+			addConfigHeadersToAttrs(ck.Headers, attrs)
+			proxyURL := strings.TrimSpace(ck.ProxyURL)
+			a := &coreauth.Auth{
+				ID:         id,
+				Provider:   "codex",
+				Label:      "codex-apikey",
+				Prefix:     prefix,
+				Status:     coreauth.StatusActive,
+				ProxyURL:   proxyURL,
+				Attributes: attrs,
+				CreatedAt:  now,
+				UpdatedAt:  now,
+			}
+			ApplyAuthExcludedModelsMeta(a, cfg, ck.ExcludedModels, "apikey")
+			out = append(out, a)
 		}
-		if ck.BaseURL != "" {
-			attrs["base_url"] = ck.BaseURL
-		}
-		if ck.Websockets {
-			attrs["websockets"] = "true"
-		}
-		if hash := diff.ComputeCodexModelsHash(ck.Models); hash != "" {
-			attrs["models_hash"] = hash
-		}
-		addConfigHeadersToAttrs(ck.Headers, attrs)
-		proxyURL := strings.TrimSpace(ck.ProxyURL)
-		a := &coreauth.Auth{
-			ID:         id,
-			Provider:   "codex",
-			Label:      "codex-apikey",
-			Prefix:     prefix,
-			Status:     coreauth.StatusActive,
-			ProxyURL:   proxyURL,
-			Attributes: attrs,
-			CreatedAt:  now,
-			UpdatedAt:  now,
-		}
-		ApplyAuthExcludedModelsMeta(a, cfg, ck.ExcludedModels, "apikey")
-		out = append(out, a)
 	}
 	return out
 }
@@ -190,6 +229,8 @@ func (s *ConfigSynthesizer) synthesizeOpenAICompat(ctx *SynthesisContext) []*cor
 	cfg := ctx.Config
 	now := ctx.Now
 	idGen := ctx.IDGenerator
+	targetPools := configAuthPoolsForSynthesis(ctx)
+	multiPool := cfg != nil && cfg.MultiAuthPoolEnabled()
 
 	out := make([]*coreauth.Auth, 0)
 	for i := range cfg.OpenAICompatibility {
@@ -207,66 +248,88 @@ func (s *ConfigSynthesizer) synthesizeOpenAICompat(ctx *SynthesisContext) []*cor
 			entry := &compat.APIKeyEntries[j]
 			key := strings.TrimSpace(entry.APIKey)
 			proxyURL := strings.TrimSpace(entry.ProxyURL)
-			idKind := fmt.Sprintf("openai-compatibility:%s", providerName)
-			id, token := idGen.Next(idKind, key, base, proxyURL)
-			attrs := map[string]string{
-				"source":       fmt.Sprintf("config:%s[%s]", providerName, token),
-				"base_url":     base,
-				"compat_name":  compat.Name,
-				"provider_key": providerName,
+			pools := targetPools
+			if len(pools) == 0 {
+				pools = []string{""}
 			}
-			if compat.Priority != 0 {
-				attrs["priority"] = strconv.Itoa(compat.Priority)
+			for _, authPool := range pools {
+				idKind := fmt.Sprintf("openai-compatibility:%s", providerName)
+				idParts := []string{key, base, proxyURL}
+				if multiPool {
+					idParts = append(idParts, authPool)
+				}
+				id, token := idGen.Next(idKind, idParts...)
+				attrs := map[string]string{
+					"source":       fmt.Sprintf("config:%s[%s]", providerName, token),
+					"base_url":     base,
+					"compat_name":  compat.Name,
+					"provider_key": providerName,
+				}
+				applyAuthPoolAttrs(attrs, authPool)
+				if compat.Priority != 0 {
+					attrs["priority"] = strconv.Itoa(compat.Priority)
+				}
+				if key != "" {
+					attrs["api_key"] = key
+				}
+				if hash := diff.ComputeOpenAICompatModelsHash(compat.Models); hash != "" {
+					attrs["models_hash"] = hash
+				}
+				addConfigHeadersToAttrs(compat.Headers, attrs)
+				a := &coreauth.Auth{
+					ID:         id,
+					Provider:   providerName,
+					Label:      compat.Name,
+					Prefix:     prefix,
+					Status:     coreauth.StatusActive,
+					ProxyURL:   proxyURL,
+					Attributes: attrs,
+					CreatedAt:  now,
+					UpdatedAt:  now,
+				}
+				out = append(out, a)
+				createdEntries++
 			}
-			if key != "" {
-				attrs["api_key"] = key
-			}
-			if hash := diff.ComputeOpenAICompatModelsHash(compat.Models); hash != "" {
-				attrs["models_hash"] = hash
-			}
-			addConfigHeadersToAttrs(compat.Headers, attrs)
-			a := &coreauth.Auth{
-				ID:         id,
-				Provider:   providerName,
-				Label:      compat.Name,
-				Prefix:     prefix,
-				Status:     coreauth.StatusActive,
-				ProxyURL:   proxyURL,
-				Attributes: attrs,
-				CreatedAt:  now,
-				UpdatedAt:  now,
-			}
-			out = append(out, a)
-			createdEntries++
 		}
 		// Fallback: create entry without API key if no APIKeyEntries
 		if createdEntries == 0 {
-			idKind := fmt.Sprintf("openai-compatibility:%s", providerName)
-			id, token := idGen.Next(idKind, base)
-			attrs := map[string]string{
-				"source":       fmt.Sprintf("config:%s[%s]", providerName, token),
-				"base_url":     base,
-				"compat_name":  compat.Name,
-				"provider_key": providerName,
+			pools := targetPools
+			if len(pools) == 0 {
+				pools = []string{""}
 			}
-			if compat.Priority != 0 {
-				attrs["priority"] = strconv.Itoa(compat.Priority)
+			for _, authPool := range pools {
+				idKind := fmt.Sprintf("openai-compatibility:%s", providerName)
+				idParts := []string{base}
+				if multiPool {
+					idParts = append(idParts, authPool)
+				}
+				id, token := idGen.Next(idKind, idParts...)
+				attrs := map[string]string{
+					"source":       fmt.Sprintf("config:%s[%s]", providerName, token),
+					"base_url":     base,
+					"compat_name":  compat.Name,
+					"provider_key": providerName,
+				}
+				applyAuthPoolAttrs(attrs, authPool)
+				if compat.Priority != 0 {
+					attrs["priority"] = strconv.Itoa(compat.Priority)
+				}
+				if hash := diff.ComputeOpenAICompatModelsHash(compat.Models); hash != "" {
+					attrs["models_hash"] = hash
+				}
+				addConfigHeadersToAttrs(compat.Headers, attrs)
+				a := &coreauth.Auth{
+					ID:         id,
+					Provider:   providerName,
+					Label:      compat.Name,
+					Prefix:     prefix,
+					Status:     coreauth.StatusActive,
+					Attributes: attrs,
+					CreatedAt:  now,
+					UpdatedAt:  now,
+				}
+				out = append(out, a)
 			}
-			if hash := diff.ComputeOpenAICompatModelsHash(compat.Models); hash != "" {
-				attrs["models_hash"] = hash
-			}
-			addConfigHeadersToAttrs(compat.Headers, attrs)
-			a := &coreauth.Auth{
-				ID:         id,
-				Provider:   providerName,
-				Label:      compat.Name,
-				Prefix:     prefix,
-				Status:     coreauth.StatusActive,
-				Attributes: attrs,
-				CreatedAt:  now,
-				UpdatedAt:  now,
-			}
-			out = append(out, a)
 		}
 	}
 	return out
@@ -277,6 +340,8 @@ func (s *ConfigSynthesizer) synthesizeVertexCompat(ctx *SynthesisContext) []*cor
 	cfg := ctx.Config
 	now := ctx.Now
 	idGen := ctx.IDGenerator
+	targetPools := configAuthPoolsForSynthesis(ctx)
+	multiPool := cfg != nil && cfg.MultiAuthPoolEnabled()
 
 	out := make([]*coreauth.Auth, 0, len(cfg.VertexCompatAPIKey))
 	for i := range cfg.VertexCompatAPIKey {
@@ -287,36 +352,47 @@ func (s *ConfigSynthesizer) synthesizeVertexCompat(ctx *SynthesisContext) []*cor
 		key := strings.TrimSpace(compat.APIKey)
 		prefix := strings.TrimSpace(compat.Prefix)
 		proxyURL := strings.TrimSpace(compat.ProxyURL)
-		idKind := "vertex:apikey"
-		id, token := idGen.Next(idKind, key, base, proxyURL)
-		attrs := map[string]string{
-			"source":       fmt.Sprintf("config:vertex-apikey[%s]", token),
-			"base_url":     base,
-			"provider_key": providerName,
+		pools := targetPools
+		if len(pools) == 0 {
+			pools = []string{""}
 		}
-		if compat.Priority != 0 {
-			attrs["priority"] = strconv.Itoa(compat.Priority)
+		for _, authPool := range pools {
+			idKind := "vertex:apikey"
+			idParts := []string{key, base, proxyURL}
+			if multiPool {
+				idParts = append(idParts, authPool)
+			}
+			id, token := idGen.Next(idKind, idParts...)
+			attrs := map[string]string{
+				"source":       fmt.Sprintf("config:vertex-apikey[%s]", token),
+				"base_url":     base,
+				"provider_key": providerName,
+			}
+			applyAuthPoolAttrs(attrs, authPool)
+			if compat.Priority != 0 {
+				attrs["priority"] = strconv.Itoa(compat.Priority)
+			}
+			if key != "" {
+				attrs["api_key"] = key
+			}
+			if hash := diff.ComputeVertexCompatModelsHash(compat.Models); hash != "" {
+				attrs["models_hash"] = hash
+			}
+			addConfigHeadersToAttrs(compat.Headers, attrs)
+			a := &coreauth.Auth{
+				ID:         id,
+				Provider:   providerName,
+				Label:      "vertex-apikey",
+				Prefix:     prefix,
+				Status:     coreauth.StatusActive,
+				ProxyURL:   proxyURL,
+				Attributes: attrs,
+				CreatedAt:  now,
+				UpdatedAt:  now,
+			}
+			ApplyAuthExcludedModelsMeta(a, cfg, compat.ExcludedModels, "apikey")
+			out = append(out, a)
 		}
-		if key != "" {
-			attrs["api_key"] = key
-		}
-		if hash := diff.ComputeVertexCompatModelsHash(compat.Models); hash != "" {
-			attrs["models_hash"] = hash
-		}
-		addConfigHeadersToAttrs(compat.Headers, attrs)
-		a := &coreauth.Auth{
-			ID:         id,
-			Provider:   providerName,
-			Label:      "vertex-apikey",
-			Prefix:     prefix,
-			Status:     coreauth.StatusActive,
-			ProxyURL:   proxyURL,
-			Attributes: attrs,
-			CreatedAt:  now,
-			UpdatedAt:  now,
-		}
-		ApplyAuthExcludedModelsMeta(a, cfg, compat.ExcludedModels, "apikey")
-		out = append(out, a)
 	}
 	return out
 }

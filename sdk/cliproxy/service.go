@@ -961,19 +961,28 @@ func (s *Service) PersistUsageSnapshot(now time.Time) error {
 }
 
 func (s *Service) ensureAuthDir() error {
-	info, err := os.Stat(s.cfg.AuthDir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			if mkErr := os.MkdirAll(s.cfg.AuthDir, 0o755); mkErr != nil {
-				return fmt.Errorf("cliproxy: failed to create auth directory %s: %w", s.cfg.AuthDir, mkErr)
-			}
-			log.Infof("created missing auth directory: %s", s.cfg.AuthDir)
-			return nil
+	paths := []string{s.cfg.AuthDir}
+	if s.cfg != nil {
+		if runtimePaths := s.cfg.RuntimeAuthPoolPaths(); len(runtimePaths) > 0 {
+			paths = runtimePaths
 		}
-		return fmt.Errorf("cliproxy: error checking auth directory %s: %w", s.cfg.AuthDir, err)
 	}
-	if !info.IsDir() {
-		return fmt.Errorf("cliproxy: auth path exists but is not a directory: %s", s.cfg.AuthDir)
+
+	for _, authDir := range paths {
+		info, err := os.Stat(authDir)
+		if err != nil {
+			if os.IsNotExist(err) {
+				if mkErr := os.MkdirAll(authDir, 0o755); mkErr != nil {
+					return fmt.Errorf("cliproxy: failed to create auth directory %s: %w", authDir, mkErr)
+				}
+				log.Infof("created missing auth directory: %s", authDir)
+				continue
+			}
+			return fmt.Errorf("cliproxy: error checking auth directory %s: %w", authDir, err)
+		}
+		if !info.IsDir() {
+			return fmt.Errorf("cliproxy: auth path exists but is not a directory: %s", authDir)
+		}
 	}
 	return nil
 }

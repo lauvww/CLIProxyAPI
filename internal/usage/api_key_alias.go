@@ -58,6 +58,36 @@ func displayAPIBucketName(apiName string) string {
 	return apiName
 }
 
+func resolveSnapshotBucketAPIName(apiName string, apiSnapshot APISnapshot) string {
+	resolved := strings.TrimSpace(apiName)
+	if resolved == "" {
+		return ""
+	}
+
+	inferredClientKey := ""
+	for _, modelSnapshot := range apiSnapshot.Models {
+		for _, detail := range modelSnapshot.Details {
+			clientAPIKey := strings.TrimSpace(detail.ClientAPIKey)
+			if clientAPIKey == "" {
+				continue
+			}
+			if inferredClientKey == "" {
+				inferredClientKey = clientAPIKey
+				continue
+			}
+			if !strings.EqualFold(inferredClientKey, clientAPIKey) {
+				return resolved
+			}
+		}
+	}
+
+	if inferredClientKey != "" {
+		return inferredClientKey
+	}
+
+	return resolved
+}
+
 // ApplyAPIKeyAliasesToSnapshot remaps API buckets using the current alias
 // table at read time so alias edits immediately reflect in usage statistics.
 func ApplyAPIKeyAliasesToSnapshot(snapshot StatisticsSnapshot) StatisticsSnapshot {
@@ -68,7 +98,7 @@ func ApplyAPIKeyAliasesToSnapshot(snapshot StatisticsSnapshot) StatisticsSnapsho
 	result := snapshot
 	result.APIs = make(map[string]APISnapshot, len(snapshot.APIs))
 	for apiName, apiSnapshot := range snapshot.APIs {
-		mappedName := displayAPIBucketName(apiName)
+		mappedName := displayAPIBucketName(resolveSnapshotBucketAPIName(apiName, apiSnapshot))
 		if mappedName == "" {
 			mappedName = apiName
 		}

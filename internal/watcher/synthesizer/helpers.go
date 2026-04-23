@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/pathutil"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/watcher/diff"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
 )
@@ -117,4 +118,47 @@ func addConfigHeadersToAttrs(headers map[string]string, attrs map[string]string)
 		}
 		attrs["header:"+key] = val
 	}
+}
+
+func configAuthPoolsForSynthesis(ctx *SynthesisContext) []string {
+	if ctx == nil || ctx.Config == nil {
+		return nil
+	}
+	if ctx.Config.MultiAuthPoolEnabled() {
+		return ctx.Config.RuntimeAuthPoolPaths()
+	}
+	current := pathutil.NormalizePath(ctx.Config.CurrentAuthPoolPath())
+	if current == "" {
+		return nil
+	}
+	return []string{current}
+}
+
+func applyAuthPoolAttrs(attrs map[string]string, authPool string) {
+	if attrs == nil {
+		return
+	}
+	authPool = pathutil.NormalizePath(authPool)
+	if authPool == "" {
+		return
+	}
+	attrs["auth_pool"] = authPool
+	attrs["pool_type"] = inferAuthPoolType(authPool)
+}
+
+func inferAuthPoolType(path string) string {
+	normalized := strings.ReplaceAll(pathutil.NormalizePath(path), "/", "\\")
+	if normalized == "" {
+		return "custom"
+	}
+	parts := strings.Split(normalized, "\\")
+	for idx := len(parts) - 1; idx >= 0; idx-- {
+		switch strings.ToLower(strings.TrimSpace(parts[idx])) {
+		case "plus":
+			return "plus"
+		case "free":
+			return "free"
+		}
+	}
+	return "custom"
 }

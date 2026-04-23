@@ -32,6 +32,7 @@ func normalizePlanType(planType string) string {
 func normalizeRequestDetailDimensions(detail RequestDetail) RequestDetail {
 	detail.AuthID = strings.TrimSpace(detail.AuthID)
 	detail.AuthIndex = strings.TrimSpace(detail.AuthIndex)
+	detail.ClientAPIKey = strings.TrimSpace(detail.ClientAPIKey)
 	detail.AuthPool = normalizeAuthPool(detail.AuthPool)
 	detail.PoolType = normalizePoolType(detail.PoolType)
 	detail.PlanType = normalizePlanType(detail.PlanType)

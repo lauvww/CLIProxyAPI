@@ -27,7 +27,7 @@ This fork uses a simple repository-driven version policy.
 2. Commit the version bump
 3. Build locally with `scripts/build-local.ps1`
 4. Publish the resulting `cli-proxy-api.exe`
-5. When ready for a public release, create a Git tag such as `v2.0.0` and publish a GitHub Release
+5. When ready for a public release, create a Git tag such as `v2.2.1` and publish a GitHub Release
 
 ## Notes
 
@@ -40,3 +40,4 @@ This fork uses a simple repository-driven version policy.
 - `--remote-model` force-enables remote model refresh for the current process and overrides config.
 - `--local-model` force-disables remote model refresh for the current process and overrides config.
 - Major releases should update backend `VERSION`, frontend `VERSION`, frontend `package.json`, and the default source version strings used by local builds together.
+- `2.2.1` documents the current stable runtime line: multi auth-pool support remains enabled, watcher hot-apply is more selective, and `/v1/models` should be treated as a global registry view unless future release notes say otherwise.

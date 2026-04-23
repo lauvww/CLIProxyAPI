@@ -19,6 +19,14 @@ const (
 	SelectedAuthCallbackMetadataKey = "selected_auth_callback"
 	// ExecutionSessionMetadataKey identifies a long-lived downstream execution session.
 	ExecutionSessionMetadataKey = "execution_session_id"
+	// ClientAPIKeyMetadataKey carries the authenticated top-level client API key.
+	ClientAPIKeyMetadataKey = "client_api_key"
+	// ResolvedAuthPoolMetadataKey carries the auth pool selected for this request.
+	ResolvedAuthPoolMetadataKey = "resolved_auth_pool"
+	// ResolvedAuthPoolModeMetadataKey carries the effective auth-pool mode.
+	ResolvedAuthPoolModeMetadataKey = "resolved_auth_pool_mode"
+	// ResolvedAuthPoolFallbackMetadataKey reports whether the request fell back to active-path.
+	ResolvedAuthPoolFallbackMetadataKey = "resolved_auth_pool_fallback"
 )
 
 // Request encapsulates the translated payload that will be sent to a provider executor.

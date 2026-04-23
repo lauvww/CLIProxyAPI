@@ -2612,6 +2612,9 @@ func (m *Manager) useSchedulerFastPath() bool {
 	if m == nil || m.scheduler == nil {
 		return false
 	}
+	if cfg, ok := m.runtimeConfig.Load().(*internalconfig.Config); ok && cfg != nil && cfg.MultiAuthPoolEnabled() {
+		return false
+	}
 	return isBuiltInSelector(m.selector)
 }
 
@@ -2639,6 +2642,8 @@ func (m *Manager) routeAwareSelectionRequired(auth *Auth, routeModel string) boo
 
 func (m *Manager) pickNextLegacy(ctx context.Context, provider, model string, opts cliproxyexecutor.Options, tried map[string]struct{}) (*Auth, ProviderExecutor, error) {
 	pinnedAuthID := pinnedAuthIDFromMetadata(opts.Metadata)
+	cfg, _ := m.runtimeConfig.Load().(*internalconfig.Config)
+	resolvedPool := resolveRequestAuthPool(cfg, opts.Metadata)
 
 	m.mu.RLock()
 	executor, okExecutor := m.executors[provider]
@@ -2660,6 +2665,9 @@ func (m *Manager) pickNextLegacy(ctx context.Context, provider, model string, op
 		if candidate.Provider != provider || candidate.Disabled {
 			continue
 		}
+		if !authBelongsToResolvedPool(candidate, resolvedPool) {
+			continue
+		}
 		if pinnedAuthID != "" && candidate.ID != pinnedAuthID {
 			continue
 		}
@@ -2675,6 +2683,7 @@ func (m *Manager) pickNextLegacy(ctx context.Context, provider, model string, op
 		m.mu.RUnlock()
 		return nil, nil, &Error{Code: "auth_not_found", Message: "no auth available"}
 	}
+	candidates = filterAuthsByResolvedPool(candidates, resolvedPool)
 	available, errAvailable := m.availableAuthsForRouteModel(candidates, provider, model, time.Now())
 	if errAvailable != nil {
 		m.mu.RUnlock()
@@ -2751,6 +2760,8 @@ func (m *Manager) pickNext(ctx context.Context, provider, model string, opts cli
 
 func (m *Manager) pickNextMixedLegacy(ctx context.Context, providers []string, model string, opts cliproxyexecutor.Options, tried map[string]struct{}) (*Auth, ProviderExecutor, string, error) {
 	pinnedAuthID := pinnedAuthIDFromMetadata(opts.Metadata)
+	cfg, _ := m.runtimeConfig.Load().(*internalconfig.Config)
+	resolvedPool := resolveRequestAuthPool(cfg, opts.Metadata)
 
 	providerSet := make(map[string]struct{}, len(providers))
 	for _, provider := range providers {
@@ -2779,6 +2790,9 @@ func (m *Manager) pickNextMixedLegacy(ctx context.Context, providers []string, m
 		if candidate == nil || candidate.Disabled {
 			continue
 		}
+		if !authBelongsToResolvedPool(candidate, resolvedPool) {
+			continue
+		}
 		if pinnedAuthID != "" && candidate.ID != pinnedAuthID {
 			continue
 		}
@@ -2804,6 +2818,7 @@ func (m *Manager) pickNextMixedLegacy(ctx context.Context, providers []string, m
 		m.mu.RUnlock()
 		return nil, nil, "", &Error{Code: "auth_not_found", Message: "no auth available"}
 	}
+	candidates = filterAuthsByResolvedPool(candidates, resolvedPool)
 	available, errAvailable := m.availableAuthsForRouteModel(candidates, "mixed", model, time.Now())
 	if errAvailable != nil {
 		m.mu.RUnlock()

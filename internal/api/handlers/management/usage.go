@@ -40,9 +40,11 @@ func (h *Handler) GetUsageStatistics(c *gin.Context) {
 	requestedAuthPoolFilter := strings.TrimSpace(c.Query("auth_pool"))
 	currentAuthPool := ""
 	authPoolEnabled := false
+	authPoolMode := "single"
 	if h != nil && h.cfg != nil {
 		currentAuthPool = strings.TrimSpace(h.cfg.CurrentAuthPoolPath())
 		authPoolEnabled = h.cfg.AuthPool.Enabled
+		authPoolMode = h.cfg.AuthPoolModeValue()
 	}
 
 	authPoolFilter := requestedAuthPoolFilter
@@ -79,12 +81,21 @@ func (h *Handler) GetUsageStatistics(c *gin.Context) {
 		"auth_pool_filter_defaulted": authPoolFilterDefaulted,
 		"current_auth_pool":          currentAuthPool,
 		"auth_pool_enabled":          authPoolEnabled,
+		"auth_pool_mode":             authPoolMode,
+		"fallback_active_path":       currentAuthPool,
 	}
 	if authPoolFilterDefaulted {
-		response["usage_scope_hint"] = fmt.Sprintf(
-			"Showing usage for the current auth pool by default (%s). Set auth_pool=all to view all auth pools.",
-			currentAuthPool,
-		)
+		if authPoolMode == "multi" {
+			response["usage_scope_hint"] = fmt.Sprintf(
+				"Showing usage for the fallback auth pool by default (%s). In multi mode, runtime traffic may also come from other bound pools. Set auth_pool=all to view all auth pools.",
+				currentAuthPool,
+			)
+		} else {
+			response["usage_scope_hint"] = fmt.Sprintf(
+				"Showing usage for the current auth pool by default (%s). Set auth_pool=all to view all auth pools.",
+				currentAuthPool,
+			)
+		}
 	} else if authPoolEnabled && authPoolFilterApplied {
 		response["usage_scope_hint"] = fmt.Sprintf(
 			"Showing usage for auth pool %s. Set auth_pool=all to view all auth pools.",
@@ -148,6 +159,9 @@ func (h *Handler) ImportUsageStatistics(c *gin.Context) {
 	if payload.Version != 0 && payload.Version != 1 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported version"})
 		return
+	}
+	if canonicalized, changed := usage.CanonicalizeAPIUsageSnapshot(payload.Usage); changed {
+		payload.Usage = canonicalized
 	}
 
 	result := h.usageStats.MergeSnapshot(payload.Usage)
