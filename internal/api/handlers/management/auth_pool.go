@@ -16,7 +16,6 @@ func (h *Handler) authPoolStatePayload() gin.H {
 	if h == nil || h.cfg == nil {
 		return gin.H{
 			"enabled":                  false,
-			"mode":                     "single",
 			"paths":                    []string{},
 			"active-path":              "",
 			"active_path":              "",
@@ -24,16 +23,6 @@ func (h *Handler) authPoolStatePayload() gin.H {
 			"auth_dir":                 "",
 			"routing-strategy-by-path": map[string]string{},
 			"routing_strategy_by_path": map[string]string{},
-			"api-key-bindings":         map[string]string{},
-			"api_key_bindings":         map[string]string{},
-			"binding-status-by-key":    map[string]map[string]any{},
-			"binding_status_by_key":    map[string]map[string]any{},
-			"bindings-by-path":         map[string][]string{},
-			"bindings_by_path":         map[string][]string{},
-			"running-paths":            []string{},
-			"running_paths":            []string{},
-			"fallback-active-path":     "",
-			"fallback_active_path":     "",
 			"current-strategy":         "",
 			"current_strategy":         "",
 		}
@@ -45,25 +34,9 @@ func (h *Handler) authPoolStatePayload() gin.H {
 	for path, strategy := range h.cfg.AuthPool.RoutingStrategyByPath {
 		strategyByPath[path] = strategy
 	}
-	apiKeyBindings := make(map[string]string, len(h.cfg.AuthPool.APIKeyBindings))
-	for apiKey, path := range h.cfg.AuthPool.APIKeyBindings {
-		apiKeyBindings[apiKey] = path
-	}
-	bindingStatusByKey := h.cfg.APIKeyBindingStatusByAPIKey()
-	bindingsByPath := make(map[string][]string)
-	for apiKey, status := range bindingStatusByKey {
-		path, _ := status["path"].(string)
-		path = pathutil.NormalizePath(path)
-		if path == "" {
-			continue
-		}
-		bindingsByPath[path] = append(bindingsByPath[path], apiKey)
-	}
-
 	currentStrategy := strings.TrimSpace(h.cfg.Routing.Strategy)
 	return gin.H{
 		"enabled":                  h.cfg.AuthPool.Enabled,
-		"mode":                     h.cfg.AuthPoolModeValue(),
 		"paths":                    append([]string(nil), h.cfg.AuthPool.Paths...),
 		"active-path":              h.cfg.AuthPool.ActivePath,
 		"active_path":              h.cfg.AuthPool.ActivePath,
@@ -71,16 +44,6 @@ func (h *Handler) authPoolStatePayload() gin.H {
 		"auth_dir":                 h.cfg.AuthDir,
 		"routing-strategy-by-path": strategyByPath,
 		"routing_strategy_by_path": strategyByPath,
-		"api-key-bindings":         apiKeyBindings,
-		"api_key_bindings":         apiKeyBindings,
-		"binding-status-by-key":    bindingStatusByKey,
-		"binding_status_by_key":    bindingStatusByKey,
-		"bindings-by-path":         bindingsByPath,
-		"bindings_by_path":         bindingsByPath,
-		"running-paths":            append([]string(nil), h.cfg.RuntimeAuthPoolPaths()...),
-		"running_paths":            append([]string(nil), h.cfg.RuntimeAuthPoolPaths()...),
-		"fallback-active-path":     h.cfg.CurrentAuthPoolPath(),
-		"fallback_active_path":     h.cfg.CurrentAuthPoolPath(),
 		"current-strategy":         currentStrategy,
 		"current_strategy":         currentStrategy,
 	}

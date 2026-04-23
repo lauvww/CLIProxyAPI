@@ -45,7 +45,6 @@ func (s *ConfigSynthesizer) synthesizeGeminiKeys(ctx *SynthesisContext) []*corea
 	now := ctx.Now
 	idGen := ctx.IDGenerator
 	targetPools := configAuthPoolsForSynthesis(ctx)
-	multiPool := cfg != nil && cfg.MultiAuthPoolEnabled()
 
 	out := make([]*coreauth.Auth, 0, len(cfg.GeminiKey))
 	for i := range cfg.GeminiKey {
@@ -63,9 +62,6 @@ func (s *ConfigSynthesizer) synthesizeGeminiKeys(ctx *SynthesisContext) []*corea
 		}
 		for _, authPool := range pools {
 			idParts := []string{key, base}
-			if multiPool {
-				idParts = append(idParts, authPool)
-			}
 			id, token := idGen.Next("gemini:apikey", idParts...)
 			attrs := map[string]string{
 				"source":  fmt.Sprintf("config:gemini[%s]", token),
@@ -106,7 +102,6 @@ func (s *ConfigSynthesizer) synthesizeClaudeKeys(ctx *SynthesisContext) []*corea
 	now := ctx.Now
 	idGen := ctx.IDGenerator
 	targetPools := configAuthPoolsForSynthesis(ctx)
-	multiPool := cfg != nil && cfg.MultiAuthPoolEnabled()
 
 	out := make([]*coreauth.Auth, 0, len(cfg.ClaudeKey))
 	for i := range cfg.ClaudeKey {
@@ -123,9 +118,6 @@ func (s *ConfigSynthesizer) synthesizeClaudeKeys(ctx *SynthesisContext) []*corea
 		}
 		for _, authPool := range pools {
 			idParts := []string{key, base}
-			if multiPool {
-				idParts = append(idParts, authPool)
-			}
 			id, token := idGen.Next("claude:apikey", idParts...)
 			attrs := map[string]string{
 				"source":  fmt.Sprintf("config:claude[%s]", token),
@@ -167,7 +159,6 @@ func (s *ConfigSynthesizer) synthesizeCodexKeys(ctx *SynthesisContext) []*coreau
 	now := ctx.Now
 	idGen := ctx.IDGenerator
 	targetPools := configAuthPoolsForSynthesis(ctx)
-	multiPool := cfg != nil && cfg.MultiAuthPoolEnabled()
 
 	out := make([]*coreauth.Auth, 0, len(cfg.CodexKey))
 	for i := range cfg.CodexKey {
@@ -183,9 +174,6 @@ func (s *ConfigSynthesizer) synthesizeCodexKeys(ctx *SynthesisContext) []*coreau
 		}
 		for _, authPool := range pools {
 			idParts := []string{key, ck.BaseURL}
-			if multiPool {
-				idParts = append(idParts, authPool)
-			}
 			id, token := idGen.Next("codex:apikey", idParts...)
 			attrs := map[string]string{
 				"source":  fmt.Sprintf("config:codex[%s]", token),
@@ -230,7 +218,6 @@ func (s *ConfigSynthesizer) synthesizeOpenAICompat(ctx *SynthesisContext) []*cor
 	now := ctx.Now
 	idGen := ctx.IDGenerator
 	targetPools := configAuthPoolsForSynthesis(ctx)
-	multiPool := cfg != nil && cfg.MultiAuthPoolEnabled()
 
 	out := make([]*coreauth.Auth, 0)
 	for i := range cfg.OpenAICompatibility {
@@ -255,9 +242,6 @@ func (s *ConfigSynthesizer) synthesizeOpenAICompat(ctx *SynthesisContext) []*cor
 			for _, authPool := range pools {
 				idKind := fmt.Sprintf("openai-compatibility:%s", providerName)
 				idParts := []string{key, base, proxyURL}
-				if multiPool {
-					idParts = append(idParts, authPool)
-				}
 				id, token := idGen.Next(idKind, idParts...)
 				attrs := map[string]string{
 					"source":       fmt.Sprintf("config:%s[%s]", providerName, token),
@@ -300,9 +284,6 @@ func (s *ConfigSynthesizer) synthesizeOpenAICompat(ctx *SynthesisContext) []*cor
 			for _, authPool := range pools {
 				idKind := fmt.Sprintf("openai-compatibility:%s", providerName)
 				idParts := []string{base}
-				if multiPool {
-					idParts = append(idParts, authPool)
-				}
 				id, token := idGen.Next(idKind, idParts...)
 				attrs := map[string]string{
 					"source":       fmt.Sprintf("config:%s[%s]", providerName, token),
@@ -341,7 +322,6 @@ func (s *ConfigSynthesizer) synthesizeVertexCompat(ctx *SynthesisContext) []*cor
 	now := ctx.Now
 	idGen := ctx.IDGenerator
 	targetPools := configAuthPoolsForSynthesis(ctx)
-	multiPool := cfg != nil && cfg.MultiAuthPoolEnabled()
 
 	out := make([]*coreauth.Auth, 0, len(cfg.VertexCompatAPIKey))
 	for i := range cfg.VertexCompatAPIKey {
@@ -359,9 +339,6 @@ func (s *ConfigSynthesizer) synthesizeVertexCompat(ctx *SynthesisContext) []*cor
 		for _, authPool := range pools {
 			idKind := "vertex:apikey"
 			idParts := []string{key, base, proxyURL}
-			if multiPool {
-				idParts = append(idParts, authPool)
-			}
 			id, token := idGen.Next(idKind, idParts...)
 			attrs := map[string]string{
 				"source":       fmt.Sprintf("config:vertex-apikey[%s]", token),

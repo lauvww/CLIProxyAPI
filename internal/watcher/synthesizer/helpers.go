@@ -124,9 +124,6 @@ func configAuthPoolsForSynthesis(ctx *SynthesisContext) []string {
 	if ctx == nil || ctx.Config == nil {
 		return nil
 	}
-	if ctx.Config.MultiAuthPoolEnabled() {
-		return ctx.Config.RuntimeAuthPoolPaths()
-	}
 	current := pathutil.NormalizePath(ctx.Config.CurrentAuthPoolPath())
 	if current == "" {
 		return nil

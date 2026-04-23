@@ -3,7 +3,6 @@ package auth
 import (
 	"context"
 	"fmt"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -14,9 +13,7 @@ import (
 )
 
 type resolvedRequestAuthPool struct {
-	Path     string
-	Mode     string
-	Fallback bool
+	Path string
 }
 
 // AuthPoolStrategySelector delegates to per-pool selectors so each auth pool
@@ -143,23 +140,14 @@ func buildRoutingSelectorForStrategy(strategy string, sessionAffinity bool, sess
 
 func resolveRequestAuthPool(cfg *internalconfig.Config, meta map[string]any) resolvedRequestAuthPool {
 	if existing := authPoolPathFromMetadata(meta); existing != "" {
-		return resolvedRequestAuthPool{
-			Path:     existing,
-			Mode:     authPoolModeFromMetadata(meta),
-			Fallback: authPoolFallbackFromMetadata(meta),
-		}
+		return resolvedRequestAuthPool{Path: existing}
 	}
 
 	if cfg == nil {
 		return resolvedRequestAuthPool{}
 	}
 
-	path, explicit, fallback := cfg.ResolveAuthPoolForAPIKey(clientAPIKeyFromMetadata(meta))
-	resolved := resolvedRequestAuthPool{
-		Path:     path,
-		Mode:     cfg.AuthPoolModeValue(),
-		Fallback: !explicit && fallback,
-	}
+	resolved := resolvedRequestAuthPool{Path: cfg.CurrentAuthPoolPath()}
 	publishResolvedAuthPoolMetadata(meta, resolved)
 	return resolved
 }
@@ -170,28 +158,6 @@ func publishResolvedAuthPoolMetadata(meta map[string]any, resolved resolvedReque
 	}
 	if resolved.Path != "" {
 		meta[cliproxyexecutor.ResolvedAuthPoolMetadataKey] = resolved.Path
-	}
-	if resolved.Mode != "" {
-		meta[cliproxyexecutor.ResolvedAuthPoolModeMetadataKey] = resolved.Mode
-	}
-	meta[cliproxyexecutor.ResolvedAuthPoolFallbackMetadataKey] = resolved.Fallback
-}
-
-func clientAPIKeyFromMetadata(meta map[string]any) string {
-	if len(meta) == 0 {
-		return ""
-	}
-	raw, ok := meta[cliproxyexecutor.ClientAPIKeyMetadataKey]
-	if !ok || raw == nil {
-		return ""
-	}
-	switch value := raw.(type) {
-	case string:
-		return strings.TrimSpace(value)
-	case []byte:
-		return strings.TrimSpace(string(value))
-	default:
-		return strings.TrimSpace(fmt.Sprint(value))
 	}
 }
 
@@ -213,45 +179,8 @@ func authPoolPathFromMetadata(meta map[string]any) string {
 	}
 }
 
-func authPoolModeFromMetadata(meta map[string]any) string {
-	if len(meta) == 0 {
-		return "single"
-	}
-	raw, ok := meta[cliproxyexecutor.ResolvedAuthPoolModeMetadataKey]
-	if !ok || raw == nil {
-		return "single"
-	}
-	switch value := raw.(type) {
-	case string:
-		return strings.ToLower(strings.TrimSpace(value))
-	case []byte:
-		return strings.ToLower(strings.TrimSpace(string(value)))
-	default:
-		return "single"
-	}
-}
-
-func authPoolFallbackFromMetadata(meta map[string]any) bool {
-	if len(meta) == 0 {
-		return false
-	}
-	raw, ok := meta[cliproxyexecutor.ResolvedAuthPoolFallbackMetadataKey]
-	if !ok || raw == nil {
-		return false
-	}
-	switch value := raw.(type) {
-	case bool:
-		return value
-	case string:
-		parsed, err := strconv.ParseBool(strings.TrimSpace(value))
-		return err == nil && parsed
-	default:
-		return false
-	}
-}
-
 func authBelongsToResolvedPool(auth *Auth, resolved resolvedRequestAuthPool) bool {
-	if auth == nil || resolved.Mode != "multi" {
+	if auth == nil {
 		return true
 	}
 	if resolved.Path == "" {
@@ -268,7 +197,7 @@ func authBelongsToResolvedPool(auth *Auth, resolved resolvedRequestAuthPool) boo
 }
 
 func filterAuthsByResolvedPool(auths []*Auth, resolved resolvedRequestAuthPool) []*Auth {
-	if resolved.Mode != "multi" || resolved.Path == "" {
+	if resolved.Path == "" {
 		return auths
 	}
 	filtered := make([]*Auth, 0, len(auths))

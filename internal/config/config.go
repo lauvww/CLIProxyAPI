@@ -223,16 +223,12 @@ type QuotaExceeded struct {
 type AuthPoolConfig struct {
 	// Enabled toggles auth pool mode. When enabled, AuthDir follows ActivePath.
 	Enabled bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
-	// Mode selects the runtime auth-pool behavior. Supported values: "single", "multi".
-	Mode string `yaml:"mode,omitempty" json:"mode,omitempty"`
 	// Paths lists available auth pool directories.
 	Paths []string `yaml:"paths,omitempty" json:"paths,omitempty"`
 	// ActivePath is the currently selected auth pool directory.
 	ActivePath string `yaml:"active-path,omitempty" json:"active-path,omitempty"`
 	// RoutingStrategyByPath stores a routing strategy for each auth pool path.
 	RoutingStrategyByPath map[string]string `yaml:"routing-strategy-by-path,omitempty" json:"routing-strategy-by-path,omitempty"`
-	// APIKeyBindings maps top-level client API keys to auth pool paths in multi mode.
-	APIKeyBindings map[string]string `yaml:"api-key-bindings,omitempty" json:"api-key-bindings,omitempty"`
 }
 
 // RoutingConfig configures how credentials are selected for requests.
@@ -764,8 +760,6 @@ func (cfg *Config) NormalizeAuthPool() {
 		return
 	}
 
-	cfg.AuthPool.Mode = normalizeAuthPoolModeValue(cfg.AuthPool.Mode)
-
 	paths := make([]string, 0, len(cfg.AuthPool.Paths)+1)
 	seen := make(map[string]struct{}, len(cfg.AuthPool.Paths)+1)
 	appendPath := func(path string) {
@@ -837,27 +831,9 @@ func (cfg *Config) NormalizeAuthPool() {
 		normalizedStrategies[poolPath] = defaultStrategy
 	}
 
-	normalizedBindings := make(map[string]string)
-	for rawAPIKey, rawPath := range cfg.AuthPool.APIKeyBindings {
-		apiKey := strings.TrimSpace(rawAPIKey)
-		if apiKey == "" {
-			continue
-		}
-		normalizedPath := normalizeAuthPoolPath(rawPath)
-		if normalizedPath == "" || !authPoolPathExists(paths, normalizedPath) {
-			continue
-		}
-		normalizedBindings[apiKey] = normalizedPath
-	}
-
 	cfg.AuthPool.Paths = paths
 	cfg.AuthPool.ActivePath = active
 	cfg.AuthPool.RoutingStrategyByPath = normalizedStrategies
-	if len(normalizedBindings) > 0 {
-		cfg.AuthPool.APIKeyBindings = normalizedBindings
-	} else {
-		cfg.AuthPool.APIKeyBindings = nil
-	}
 	if authDir != "" {
 		cfg.AuthDir = authDir
 	}
@@ -949,19 +925,6 @@ func (cfg *Config) SyncAuthPoolFromAuthDir() {
 	cfg.NormalizeAuthPool()
 }
 
-// AuthPoolModeValue returns the normalized runtime mode for auth-pool behavior.
-func (cfg *Config) AuthPoolModeValue() string {
-	if cfg == nil {
-		return "single"
-	}
-	return normalizeAuthPoolModeValue(cfg.AuthPool.Mode)
-}
-
-// MultiAuthPoolEnabled reports whether multi-active auth-pool routing is enabled.
-func (cfg *Config) MultiAuthPoolEnabled() bool {
-	return cfg != nil && cfg.AuthPool.Enabled && cfg.AuthPoolModeValue() == "multi"
-}
-
 // RuntimeAuthPoolPaths returns the auth pool directories that should actively participate at runtime.
 func (cfg *Config) RuntimeAuthPoolPaths() []string {
 	if cfg == nil {
@@ -975,87 +938,11 @@ func (cfg *Config) RuntimeAuthPoolPaths() []string {
 		return nil
 	}
 
-	if cfg.MultiAuthPoolEnabled() {
-		paths := make([]string, 0, len(cfg.AuthPool.Paths)+1)
-		seen := make(map[string]struct{}, len(cfg.AuthPool.Paths)+1)
-		appendPath := func(path string) {
-			normalized := normalizeAuthPoolPath(path)
-			if normalized == "" {
-				return
-			}
-			key := normalizeAuthPoolPathKey(normalized)
-			if key == "" {
-				return
-			}
-			if _, exists := seen[key]; exists {
-				return
-			}
-			seen[key] = struct{}{}
-			paths = append(paths, normalized)
-		}
-		for _, path := range cfg.AuthPool.Paths {
-			appendPath(path)
-		}
-		appendPath(cfg.AuthPool.ActivePath)
-		return paths
-	}
-
 	current := normalizeAuthPoolPath(cfg.CurrentAuthPoolPath())
 	if current == "" {
 		return nil
 	}
 	return []string{current}
-}
-
-// ResolveAuthPoolForAPIKey resolves which auth pool should serve a top-level client API key.
-func (cfg *Config) ResolveAuthPoolForAPIKey(apiKey string) (path string, explicit bool, fallback bool) {
-	if cfg == nil {
-		return "", false, false
-	}
-
-	fallbackPath := normalizeAuthPoolPath(cfg.CurrentAuthPoolPath())
-	if !cfg.MultiAuthPoolEnabled() {
-		return fallbackPath, false, false
-	}
-
-	apiKey = strings.TrimSpace(apiKey)
-	if apiKey == "" {
-		return fallbackPath, false, fallbackPath != ""
-	}
-
-	if boundPath, ok := cfg.AuthPool.APIKeyBindings[apiKey]; ok {
-		normalized := normalizeAuthPoolPath(boundPath)
-		if normalized != "" {
-			return normalized, true, false
-		}
-	}
-
-	return fallbackPath, false, fallbackPath != ""
-}
-
-// APIKeyBindingStatusByAPIKey summarizes whether each configured client API key is explicitly bound.
-func (cfg *Config) APIKeyBindingStatusByAPIKey() map[string]map[string]any {
-	result := make(map[string]map[string]any)
-	if cfg == nil {
-		return result
-	}
-
-	fallbackPath := normalizeAuthPoolPath(cfg.CurrentAuthPoolPath())
-	keys := append([]string(nil), cfg.APIKeys...)
-	for _, rawKey := range keys {
-		apiKey := strings.TrimSpace(rawKey)
-		if apiKey == "" {
-			continue
-		}
-		path, explicit, fallback := cfg.ResolveAuthPoolForAPIKey(apiKey)
-		result[apiKey] = map[string]any{
-			"path":      path,
-			"explicit":  explicit,
-			"fallback":  fallback,
-			"is_active": authPoolPathExists([]string{fallbackPath}, path),
-		}
-	}
-	return result
 }
 
 // CurrentAuthPoolPath returns the active auth pool path, falling back to AuthDir.
@@ -1196,15 +1083,6 @@ func normalizeAuthPoolRoutingStrategy(strategy string) (string, bool) {
 		return "fill-first", true
 	default:
 		return "", false
-	}
-}
-
-func normalizeAuthPoolModeValue(mode string) string {
-	switch strings.ToLower(strings.TrimSpace(mode)) {
-	case "multi":
-		return "multi"
-	default:
-		return "single"
 	}
 }
 

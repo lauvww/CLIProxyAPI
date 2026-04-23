@@ -2612,9 +2612,6 @@ func (m *Manager) useSchedulerFastPath() bool {
 	if m == nil || m.scheduler == nil {
 		return false
 	}
-	if cfg, ok := m.runtimeConfig.Load().(*internalconfig.Config); ok && cfg != nil && cfg.MultiAuthPoolEnabled() {
-		return false
-	}
 	return isBuiltInSelector(m.selector)
 }
 

@@ -359,19 +359,7 @@ func (h *Handler) respondAuthFilesForScope(c *gin.Context, files []gin.H, viewed
 		"current_auth_pool": currentAuthPool,
 		"viewed_auth_pool":  viewedAuthPool,
 		"auth_pool_enabled": h != nil && h.cfg != nil && h.cfg.AuthPool.Enabled,
-		"auth_pool_mode": func() string {
-			if h == nil || h.cfg == nil {
-				return "single"
-			}
-			return h.cfg.AuthPoolModeValue()
-		}(),
-		"fallback_active_path": func() string {
-			if h == nil || h.cfg == nil {
-				return ""
-			}
-			return strings.TrimSpace(h.cfg.CurrentAuthPoolPath())
-		}(),
-		"readonly": viewedAuthPool != "" && !pathutil.PathsEqual(viewedAuthPool, currentAuthPool),
+		"readonly":          viewedAuthPool != "" && !pathutil.PathsEqual(viewedAuthPool, currentAuthPool),
 	})
 }
 

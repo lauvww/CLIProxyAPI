@@ -17,7 +17,6 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
 	sdkconfig "github.com/router-for-me/CLIProxyAPI/v6/sdk/config"
 	log "github.com/sirupsen/logrus"
-	"gopkg.in/yaml.v3"
 )
 
 const (
@@ -208,11 +207,6 @@ func (h *Handler) PutConfigYAML(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_yaml", "message": "cannot read request body"})
 		return
 	}
-	var cfg config.Config
-	if err = yaml.Unmarshal(body, &cfg); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_yaml", "message": err.Error()})
-		return
-	}
 	// Validate config using LoadConfigOptional with optional=false to enforce parsing
 	tmpDir := filepath.Dir(h.configFilePath)
 	tmpFile, err := os.CreateTemp(tmpDir, "config-validate-*.yaml")
@@ -235,7 +229,7 @@ func (h *Handler) PutConfigYAML(c *gin.Context) {
 	defer func() {
 		_ = os.Remove(tempFile)
 	}()
-	_, err = config.LoadConfigOptional(tempFile, false)
+	newCfg, err := config.LoadConfigOptional(tempFile, false)
 	if err != nil {
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "invalid_config", "message": err.Error()})
 		return
@@ -244,12 +238,6 @@ func (h *Handler) PutConfigYAML(c *gin.Context) {
 	defer h.mu.Unlock()
 	if WriteConfig(h.configFilePath, body) != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "write_failed", "message": "failed to write config"})
-		return
-	}
-	// Reload into handler to keep memory in sync
-	newCfg, err := config.LoadConfig(h.configFilePath)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "reload_failed", "message": err.Error()})
 		return
 	}
 	h.cfg = newCfg

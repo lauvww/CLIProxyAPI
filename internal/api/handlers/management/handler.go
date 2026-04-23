@@ -20,6 +20,7 @@ import (
 	coreauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/crypto/bcrypt"
+	"gopkg.in/yaml.v3"
 )
 
 type attemptInfo struct {
@@ -50,6 +51,9 @@ type Handler struct {
 	logDir              string
 	postAuthHook        coreauth.PostAuthHook
 	configApplyHook     func(*config.Config)
+	configApplyMu       sync.Mutex
+	configApplyRunning  bool
+	configApplyPending  *config.Config
 }
 
 // NewHandler creates a new management handler instance.
@@ -291,14 +295,7 @@ func (h *Handler) applyConfigUpdate() {
 	if h == nil || h.configApplyHook == nil || h.cfg == nil {
 		return
 	}
-
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			log.Warnf("management config apply hook panicked: %v", recovered)
-		}
-	}()
-
-	h.configApplyHook(h.cfg)
+	h.scheduleConfigApply(cloneConfigForApply(h.cfg))
 }
 
 // persist saves the current in-memory config to disk.
@@ -310,6 +307,64 @@ func (h *Handler) persist(c *gin.Context) bool {
 	h.applyConfigUpdate()
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	return true
+}
+
+func cloneConfigForApply(cfg *config.Config) *config.Config {
+	if cfg == nil {
+		return nil
+	}
+
+	raw, errMarshal := yaml.Marshal(cfg)
+	if errMarshal != nil {
+		copyCfg := *cfg
+		return &copyCfg
+	}
+
+	var cloned config.Config
+	if errUnmarshal := yaml.Unmarshal(raw, &cloned); errUnmarshal != nil {
+		copyCfg := *cfg
+		return &copyCfg
+	}
+	return &cloned
+}
+
+func (h *Handler) scheduleConfigApply(cfg *config.Config) {
+	if h == nil || h.configApplyHook == nil || cfg == nil {
+		return
+	}
+
+	h.configApplyMu.Lock()
+	if h.configApplyRunning {
+		h.configApplyPending = cfg
+		h.configApplyMu.Unlock()
+		return
+	}
+	h.configApplyRunning = true
+	h.configApplyMu.Unlock()
+
+	go func(current *config.Config) {
+		next := current
+		for next != nil {
+			func(applyCfg *config.Config) {
+				defer func() {
+					if recovered := recover(); recovered != nil {
+						log.Warnf("management config apply hook panicked: %v", recovered)
+					}
+				}()
+				h.configApplyHook(applyCfg)
+			}(next)
+
+			h.configApplyMu.Lock()
+			next = h.configApplyPending
+			h.configApplyPending = nil
+			if next == nil {
+				h.configApplyRunning = false
+				h.configApplyMu.Unlock()
+				return
+			}
+			h.configApplyMu.Unlock()
+		}
+	}(cfg)
 }
 
 // Helper methods for simple types

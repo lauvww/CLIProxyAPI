@@ -36,11 +36,8 @@ remote-management:
 auth-dir: "~/.cli-proxy-api"
 
 # Optional auth pool configuration.
-# Add multiple auth directories and switch active-path to choose the fallback/default pool.
-# In single mode, only active-path participates in runtime routing.
-# In multi mode, client API keys can be bound to different pools; unbound keys fall back to active-path.
+# Add multiple auth directories and switch active-path to choose the current runtime pool.
 # auth-pool:
-#   mode: single
 #   paths:
 #     - "~/.cli-proxy-api"
 #     - "~/auth-pool/team-a"
@@ -48,9 +45,6 @@ auth-dir: "~/.cli-proxy-api"
 #   routing-strategy-by-path:
 #     "~/.cli-proxy-api": round-robin
 #     "~/auth-pool/team-a": fill-first
-#   api-key-bindings:
-#     "your-api-key-1": "~/.cli-proxy-api"
-#     "your-api-key-2": "~/auth-pool/team-a"
 
 # API keys for authentication
 api-keys:

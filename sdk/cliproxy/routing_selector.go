@@ -17,7 +17,6 @@ type resolvedRoutingSelectorConfig struct {
 	sessionTTLString string
 	sessionTTL       time.Duration
 	authPoolEnabled  bool
-	authPoolMode     string
 	authPoolRouting  string
 }
 
@@ -48,7 +47,6 @@ func resolveRoutingSelectorConfig(cfg *config.Config) resolvedRoutingSelectorCon
 	}
 
 	resolved.authPoolEnabled = cfg.AuthPool.Enabled
-	resolved.authPoolMode = cfg.AuthPoolModeValue()
 	resolved.authPoolRouting = authPoolRoutingSignature(cfg)
 
 	return resolved
@@ -57,7 +55,7 @@ func resolveRoutingSelectorConfig(cfg *config.Config) resolvedRoutingSelectorCon
 func buildRoutingSelector(cfg *config.Config) coreauth.Selector {
 	resolved := resolveRoutingSelectorConfig(cfg)
 
-	if cfg != nil && cfg.AuthPool.Enabled && cfg.AuthPoolModeValue() == "multi" {
+	if cfg != nil && cfg.AuthPool.Enabled {
 		return coreauth.NewAuthPoolStrategySelector((*internalconfig.Config)(cfg))
 	}
 

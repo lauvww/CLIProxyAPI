@@ -186,6 +186,7 @@ type Server struct {
 	keepAliveOnTimeout func()
 	keepAliveHeartbeat chan struct{}
 	keepAliveStop      chan struct{}
+	clientSummarySeq   atomic.Uint64
 }
 
 // NewServer creates and initializes a new API server instance.
@@ -795,8 +796,15 @@ func (s *Server) watchKeepAlive() {
 // otherwise it routes to OpenAI handler.
 func (s *Server) unifiedModelsHandler(openaiHandler *openai.OpenAIAPIHandler, claudeHandler *claude.ClaudeCodeAPIHandler) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		c.Header("X-CPA-Models-Scope", "global")
-		c.Header("X-CPA-Models-Mode", "global-registry-view")
+		scope, mode, authDir, authPool := currentModelsViewHeaders(s.cfg)
+		c.Header("X-CPA-Models-Scope", scope)
+		c.Header("X-CPA-Models-Mode", mode)
+		if authDir != "" {
+			c.Header("X-CPA-Models-Auth-Dir", authDir)
+		}
+		if authPool != "" {
+			c.Header("X-CPA-Models-Auth-Pool", authPool)
+		}
 		userAgent := c.GetHeader("User-Agent")
 
 		// Route to Claude handler if User-Agent starts with "claude-cli"
@@ -808,6 +816,24 @@ func (s *Server) unifiedModelsHandler(openaiHandler *openai.OpenAIAPIHandler, cl
 			openaiHandler.OpenAIModels(c)
 		}
 	}
+}
+
+func currentModelsViewHeaders(cfg *config.Config) (scope string, mode string, authDir string, authPool string) {
+	scope = "runtime"
+	mode = "auth-dir-view"
+	if cfg == nil {
+		return scope, mode, "", ""
+	}
+
+	authDir = strings.TrimSpace(cfg.AuthDir)
+	if cfg.AuthPool.Enabled {
+		authPool = strings.TrimSpace(cfg.CurrentAuthPoolPath())
+		if authPool != "" {
+			mode = "active-auth-pool-view"
+		}
+	}
+
+	return scope, mode, authDir, authPool
 }
 
 // Start begins listening for and serving HTTP or HTTPS requests.
@@ -1017,12 +1043,8 @@ func (s *Server) UpdateClients(cfg *config.Config) {
 		}
 	}
 
-	// Count client sources from configuration and auth store.
-	tokenStore := sdkAuth.GetTokenStore()
-	if dirSetter, ok := tokenStore.(interface{ SetBaseDir(string) }); ok {
-		dirSetter.SetBaseDir(cfg.AuthDir)
-	}
-	authEntries := util.CountAuthFiles(context.Background(), tokenStore)
+	// Count client sources from configuration and auth store asynchronously to avoid
+	// blocking config save/apply on large auth directories.
 	geminiAPIKeyCount := len(cfg.GeminiKey)
 	claudeAPIKeyCount := len(cfg.ClaudeKey)
 	codexAPIKeyCount := len(cfg.CodexKey)
@@ -1033,16 +1055,51 @@ func (s *Server) UpdateClients(cfg *config.Config) {
 		openAICompatCount += len(entry.APIKeyEntries)
 	}
 
-	total := authEntries + geminiAPIKeyCount + claudeAPIKeyCount + codexAPIKeyCount + vertexAICompatCount + openAICompatCount
-	fmt.Printf("server clients and configuration updated: %d clients (%d auth entries + %d Gemini API keys + %d Claude API keys + %d Codex keys + %d Vertex-compat + %d OpenAI-compat)\n",
-		total,
-		authEntries,
+	s.scheduleClientSummaryLog(
+		cfg.AuthDir,
 		geminiAPIKeyCount,
 		claudeAPIKeyCount,
 		codexAPIKeyCount,
 		vertexAICompatCount,
 		openAICompatCount,
 	)
+}
+
+func (s *Server) scheduleClientSummaryLog(
+	authDir string,
+	geminiAPIKeyCount int,
+	claudeAPIKeyCount int,
+	codexAPIKeyCount int,
+	vertexAICompatCount int,
+	openAICompatCount int,
+) {
+	if s == nil {
+		return
+	}
+
+	seq := s.clientSummarySeq.Add(1)
+	tokenStore := sdkAuth.GetTokenStore()
+	go func() {
+		authEntries := 0
+		if dirSetter, ok := tokenStore.(interface{ SetBaseDir(string) }); ok {
+			dirSetter.SetBaseDir(authDir)
+		}
+		authEntries = util.CountAuthFiles(context.Background(), tokenStore)
+		if s.clientSummarySeq.Load() != seq {
+			return
+		}
+		total := authEntries + geminiAPIKeyCount + claudeAPIKeyCount + codexAPIKeyCount + vertexAICompatCount + openAICompatCount
+		fmt.Printf(
+			"server clients and configuration updated: %d clients (%d auth entries + %d Gemini API keys + %d Claude API keys + %d Codex keys + %d Vertex-compat + %d OpenAI-compat)\n",
+			total,
+			authEntries,
+			geminiAPIKeyCount,
+			claudeAPIKeyCount,
+			codexAPIKeyCount,
+			vertexAICompatCount,
+			openAICompatCount,
+		)
+	}()
 }
 
 func (s *Server) SetWebsocketAuthChangeHandler(fn func(bool, bool)) {
